@@ -6,9 +6,18 @@ leans on a pile of cross tools that a major OS bump can knock over. This doc
 gets you back to a green build without guesswork.
 
 The short version: **the Rust half survives OS updates, the Homebrew half is the
-part that breaks, and GRUB is the one genuinely painful dependency on macOS.**
-There are two build paths and only one of them needs GRUB — pick the path you
-actually need before you go chasing tools you don't.
+part that breaks, and GRUB used to be the one genuinely painful dependency on
+macOS — but on macOS 26 it is now a clean `brew install`.** There are two build
+paths and only one of them needs GRUB — pick the path you actually need before
+you go chasing tools you don't.
+
+> **Update (macOS 26 / Tahoe, verified 2026-07):** native Path B now works.
+> Homebrew ships a usable `x86_64-elf-grub` and a prebuilt `qemu` bottle, and the
+> kernel boots under QEMU's bundled edk2 (UEFI) firmware. No Linux container, no
+> building GRUB from source. See **Path B — native macOS** below; the container
+> route is kept only as a fallback. The one wrinkle: Homebrew's `x86_64-elf-grub`
+> is UEFI-only, so QEMU must be pointed at edk2 firmware with `QEMU_FIRMWARE=uefi`
+> (the Makefile handles the details).
 
 ---
 
@@ -24,7 +33,7 @@ Knowing which one you need saves you the worst of the setup.
 | Needs | cargo + nasm + GNU cross-linker | Path A **plus** `grub-mkrescue` **plus** `qemu` |
 | GRUB required? | **No** | **Yes** (this is the hard one on macOS) |
 | QEMU required? | **No** | **Yes** |
-| Works natively on macOS today? | **Yes** | Only via a container, realistically (see Path B) |
+| Works natively on macOS today? | **Yes** | **Yes** on macOS 26 (`brew install x86_64-elf-grub qemu mtools coreutils`, boot under UEFI). Container is now just a fallback. |
 
 If your goal is "see the kernel boot and poke at it," **Path A is enough and it
 works on a stock Mac.** You only need Path B for the QEMU-based boot tests, GDB
@@ -53,11 +62,18 @@ formulae exist and are reliable:**
   `x86_64-elf-readelf`, `x86_64-elf-objcopy`, and friends. **This is what links
   the kernel** (see the linker gotcha below).
 - `xorriso` — ISO filesystem tool that `grub-mkrescue` shells out to (Path B).
+- `mtools` — provides `mformat`, which `grub-mkrescue` also shells out to when
+  building the EFI boot image (Path B). Without it `grub-mkrescue` dies with
+  `` error: `mformat` invocation failed ``.
+- `coreutils` — provides `gtimeout` (macOS has no `timeout`), used by the headless
+  boot test (Path B).
 
 **Missing / needs installing:**
 
-- `qemu-system-x86_64` — `brew install qemu` (Path B).
-- `grub-mkrescue` — **not a simple `brew install`.** See Path B.
+- `qemu-system-x86_64` — `brew install qemu` (Path B). The bottle also bundles
+  the edk2/OVMF UEFI firmware the native boot needs.
+- `grub-mkrescue` — on macOS 26 this **is** a simple `brew install x86_64-elf-grub`
+  (it lands as `x86_64-elf-grub-mkrescue`). See Path B.
 - `node` / `npm` — only needed for the optional headless v86 boot test; not part
   of the core build.
 
@@ -153,12 +169,21 @@ If the bare-metal target is missing:
 rustup target add x86_64-unknown-none
 ```
 
-### 4. QEMU (Path B only)
+### 4. QEMU + GRUB + helpers (Path B only)
 
 ```sh
-brew install qemu
+brew install qemu x86_64-elf-grub mtools coreutils
 qemu-system-x86_64 --version
+which x86_64-elf-grub-mkrescue mformat gtimeout
 ```
+
+- `qemu` — the emulator, plus the bundled edk2 UEFI firmware at
+  `/opt/homebrew/share/qemu/edk2-x86_64-code.fd`.
+- `x86_64-elf-grub` — provides `x86_64-elf-grub-mkrescue`. Note it ships **only**
+  the `x86_64-efi` platform (no legacy `i386-pc`), so the ISO it builds is
+  UEFI-only — which is why the boot targets pass `QEMU_FIRMWARE=uefi`.
+- `mtools` — `mformat`, required by `grub-mkrescue`.
+- `coreutils` — `gtimeout`, since macOS has no `timeout`.
 
 ### 5. node (optional — only for the headless v86 boot test)
 
@@ -199,30 +224,68 @@ this page is required unless you specifically need QEMU or a real ISO.
 ## Path B — full ISO + QEMU
 
 This is `make iso`, `make run`, `make run-headless`, and `make debug`. It needs
-two more things beyond Path A:
+these beyond Path A: `qemu`, `x86_64-elf-grub`, `mtools`, `coreutils`
+(checklist step 4).
 
-- `qemu-system-x86_64` — easy: `brew install qemu` (checklist step 4).
-- `grub-mkrescue` — **the genuinely painful one on macOS.** Read below before
-  you sink time into it.
+### Path B — native macOS (recommended, macOS 26)
 
-### The honest truth about grub-mkrescue on macOS
+The old advice here was "don't fight GRUB natively, use a container." On macOS 26
+that's no longer true — the native path is a handful of `brew install`s and one
+extra QEMU flag. Here's why it works and how to run it.
 
-There is **no reliable, first-class Homebrew formula that gives you a working
-`grub-mkrescue` for building x86 BIOS-boot rescue images.** Mainline Homebrew
-does not ship a usable GRUB for this, and the `*-elf-grub` style taps are
-inconsistently maintained and frequently break across macOS releases. GRUB is a
-bootloader that has to be cross-built for the `i386-pc` target, and Apple's
-LLVM/clang cannot produce the `i386-elf` binaries GRUB needs — so any native
-route means building GRUB (and its `mtools`/`xorriso` helpers) from source with
-a cross toolchain. It is fiddly, it breaks on OS updates, and it is exactly the
-kind of yak-shave a major-version bump loves to reopen.
+**Why it works now:** Homebrew's `x86_64-elf-grub` gives a working
+`x86_64-elf-grub-mkrescue`, and the `qemu` bottle ships prebuilt (no more failing
+source compile against an old Clang). The one catch is that `x86_64-elf-grub`
+ships **only the `x86_64-efi` platform** — it has no `i386-pc` (legacy BIOS)
+modules — so the rescue ISO is **UEFI-only**. QEMU defaults to SeaBIOS (legacy
+BIOS), which can't read that ISO; boot it fails over to network boot and you get
+an empty serial log. The fix is to boot QEMU with the **edk2 (UEFI) firmware**
+that's bundled with the `qemu` bottle. The Makefile does this for you when you
+pass `QEMU_FIRMWARE=uefi`: it wires up the edk2 code + a writable copy of the
+vars store as a `pflash` pair.
 
-**Recommendation: don't fight GRUB natively. Run Path B inside a Linux
-container.** That's why Rancher Desktop / Lima was being set up on this machine.
-A Linux image has `grub-pc-bin`, `grub-common`, `xorriso`, `mtools`, and `qemu`
-as one-line package installs that Just Work, and it's immune to macOS updates.
+Because macOS also lacks `readelf`, `timeout`, and a GNU `ld`, the full native
+invocation carries five overrides. Run any Path B target like this:
 
-#### Option B1 (recommended) — build/run inside a Linux container
+```sh
+make run-headless \
+  LD=x86_64-elf-ld \
+  READELF=x86_64-elf-readelf \
+  GRUB_MKRESCUE=x86_64-elf-grub-mkrescue \
+  TIMEOUT=gtimeout \
+  QEMU_FIRMWARE=uefi
+```
+
+Swap `run-headless` for `iso`, `run`, or `debug` as needed (same overrides). On a
+green run you'll see GRUB load, then:
+
+```
+Ziran OS booted: kernel_main reached, long mode active.
+...
+[boot test] PASS -- kernel reached long mode
+```
+
+> That's a mouthful to type. Since the Makefile reads all five as environment
+> defaults, you can export them once per shell and then just `make run-headless`:
+>
+> ```sh
+> export LD=x86_64-elf-ld READELF=x86_64-elf-readelf \
+>        GRUB_MKRESCUE=x86_64-elf-grub-mkrescue TIMEOUT=gtimeout QEMU_FIRMWARE=uefi
+> ```
+
+The `error: no suitable video mode found` and `WARNING: no console will be
+available to OS` lines GRUB prints before the handoff are harmless — the kernel
+talks over the serial port, not the GRUB console.
+
+### Path B — Linux container (fallback)
+
+If a future macOS update breaks the native GRUB again, or you want a build
+environment immune to macOS entirely, run Path B inside a Linux container. A
+Linux image has `grub-pc-bin`, `grub-common`, `xorriso`, `mtools`, and `qemu` as
+one-line package installs, boots via legacy BIOS (no UEFI-firmware dance), and is
+unaffected by macOS updates.
+
+#### Option B1 — build/run inside a Linux container
 
 With Rancher Desktop (or Colima/Lima) providing a `docker`- or `nerdctl`-
 compatible runtime, run the full pipeline in a throwaway Debian/Ubuntu
@@ -251,35 +314,30 @@ each run doesn't reinstall the world.) `grub-pc-bin` supplies the BIOS-target
 GRUB modules `grub-mkrescue` needs; without it you'll get an EFI-only or empty
 image.
 
-#### Option B2 (native, only if you insist) — build GRUB from source
+> **Building GRUB from source is no longer necessary.** Earlier versions of this
+> guide walked through cross-building GRUB against an `i386-elf` toolchain (the
+> phil-opp / OSDev route). On macOS 26 the Homebrew `x86_64-elf-grub` formula
+> makes that obsolete — use **Path B — native macOS** above. The from-source
+> route is only of historical interest now: OSDev wiki
+> <https://wiki.osdev.org/GRUB>, phil-opp <https://github.com/phil-opp/x86_64-grub>.
 
-If you truly want a native macOS `grub-mkrescue`, you build GRUB against an
-`i386-elf` (or `x86_64-elf`) cross toolchain, plus `objconv`, plus `xorriso` and
-`mtools`. This is the phil-opp / OSDev route and it is well-documented but
-brittle across macOS versions:
+### Which Path B target to run
 
-- OSDev wiki: <https://wiki.osdev.org/GRUB> (macOS section)
-- phil-opp's prebuilt-ish approach: <https://github.com/phil-opp/x86_64-grub>
-
-Expect to install a cross binutils/GCC, `brew install objconv xorriso`, `brew
-install mtools`, then `configure`/`make`/`make install` GRUB with
-`TARGET_CC`/`TARGET_OBJCOPY`/etc. pointed at the cross tools. Budget an evening,
-and expect to redo it after the next macOS update. **For a hobby project, B1 is
-the better use of your life.**
-
-### Running Path B (once GRUB + QEMU exist)
-
-Natively on macOS, still with the linker overrides:
+Inside a Linux container (Option B1) everything is native GNU, so drop all the
+overrides — just `make iso`, `make run-headless`, etc. Natively on macOS, carry
+the five overrides from **Path B — native macOS** above:
 
 ```sh
-make iso          LD=x86_64-elf-ld READELF=x86_64-elf-readelf   # build build/ziran.iso
-make run          LD=x86_64-elf-ld READELF=x86_64-elf-readelf   # boot in a QEMU window, serial->stdout
-make run-headless LD=x86_64-elf-ld READELF=x86_64-elf-readelf   # no window; asserts the boot marker
-make debug        LD=x86_64-elf-ld READELF=x86_64-elf-readelf   # freeze for GDB on :1234
+# macOS-native; O = the override block, shown once for brevity:
+#   LD=x86_64-elf-ld READELF=x86_64-elf-readelf \
+#   GRUB_MKRESCUE=x86_64-elf-grub-mkrescue TIMEOUT=gtimeout QEMU_FIRMWARE=uefi
+make iso          $O   # build build/ziran.iso
+make run          $O   # boot in a QEMU window, serial->stdout
+make run-headless $O   # no window; asserts the boot marker
+make debug        $O   # freeze for GDB on :1234
 ```
 
-Inside a Linux container (Option B1) drop the overrides — just `make iso`,
-`make run-headless`, etc.
+(Or `export` the block once, as shown above, and run the bare `make` targets.)
 
 ---
 
@@ -305,11 +363,14 @@ Run the Path A steps and confirm the kernel's output appears in the browser at
 ### 3. Headless QEMU boot test (Path B — needs qemu + GRUB)
 
 ```sh
-make run-headless LD=x86_64-elf-ld READELF=x86_64-elf-readelf
+make run-headless \
+  LD=x86_64-elf-ld READELF=x86_64-elf-readelf \
+  GRUB_MKRESCUE=x86_64-elf-grub-mkrescue TIMEOUT=gtimeout QEMU_FIRMWARE=uefi
 ```
 
-This builds the ISO, boots it in QEMU with serial captured to
-`build/serial.log`, and greps for the marker `Ziran OS booted`. Success prints:
+This builds the ISO, boots it in QEMU under edk2 (UEFI) firmware with serial
+captured to `build/serial.log`, and greps for the marker `Ziran OS booted`.
+Success prints:
 
 ```
 [boot test] PASS -- kernel reached long mode
@@ -333,10 +394,27 @@ macOS has no `readelf`. Pass `READELF=x86_64-elf-readelf` (it comes from
 `x86_64-elf-binutils`).
 
 **`grub-mkrescue: command not found`**
-Expected on stock macOS. If you only need the browser demo, you're on the wrong
-path — use **Path A**, which doesn't need GRUB. If you genuinely need an ISO, use
-**Path B Option B1** (Linux container) or, reluctantly, B2 (build GRUB from
-source).
+On macOS the binary is prefixed: `x86_64-elf-grub-mkrescue` (from
+`brew install x86_64-elf-grub`). Pass `GRUB_MKRESCUE=x86_64-elf-grub-mkrescue`.
+If you only need the browser demo, use **Path A**, which doesn't need GRUB at all.
+
+**`` error: `mformat` invocation failed `` from grub-mkrescue**
+`grub-mkrescue` needs `mformat` to build the EFI boot image. `brew install mtools`.
+
+**Boot test FAILs with an empty `build/serial.log`; a VGA screendump shows
+`Boot failed: Could not read from CDROM` then iPXE network boot**
+The ISO built by Homebrew's `x86_64-elf-grub` is **UEFI-only** (that formula has
+no `i386-pc`/legacy-BIOS platform), but QEMU defaulted to SeaBIOS, which can't
+read it — so it fell through to network boot and the kernel never ran. Boot under
+UEFI firmware by adding `QEMU_FIRMWARE=uefi` to the `make` line. (To inspect the
+VGA console yourself: run QEMU with `-monitor unix:build/mon.sock,server,nowait`,
+then `screendump build/screen.ppm` over that socket and `sips -s format png` it.)
+
+**`qemu: could not load PC BIOS '.../edk2-x86_64-code.fd'` when you pass it to `-bios`**
+The edk2 firmware is split into a read-only *code* half and a writable *vars*
+half; it must be attached as two `pflash` drives, not via `-bios`. `QEMU_FIRMWARE=uefi`
+does this correctly (code read-only on `unit=0`, a writable copy of the vars
+template on `unit=1`).
 
 **A downloaded emulator/app binary won't run — "cannot be opened because the
 developer cannot be verified," or it's silently killed**
@@ -369,8 +447,16 @@ confirm `rustup show` matches `rust-toolchain.toml`.
 4. **Path A (browser, works today):**
    `make web LD=x86_64-elf-ld READELF=x86_64-elf-readelf`, then
    `cd web && python3 -m http.server 8000`.
-5. **Path B (ISO/QEMU):** `brew install qemu`; run GRUB in a **Linux container**
-   (`make run-headless` inside Debian) — don't fight native macOS GRUB.
+5. **Path B (ISO/QEMU), native on macOS 26:**
+   `brew install qemu x86_64-elf-grub mtools coreutils`, then
+   ```sh
+   make run-headless \
+     LD=x86_64-elf-ld READELF=x86_64-elf-readelf \
+     GRUB_MKRESCUE=x86_64-elf-grub-mkrescue TIMEOUT=gtimeout QEMU_FIRMWARE=uefi
+   ```
+   (`QEMU_FIRMWARE=uefi` is required because Homebrew's GRUB is UEFI-only.) A
+   Linux container is now just a fallback if native GRUB ever breaks again.
 6. Verify with
    `make check-header LD=x86_64-elf-ld READELF=x86_64-elf-readelf`
-   and, for Path B, `make run-headless ...` looking for `Ziran OS booted`.
+   and, for Path B, the `make run-headless ...` line above looking for
+   `Ziran OS booted`.

@@ -23,12 +23,16 @@ ARCH        := x86_64
 PROFILE     := release
 TARGET      := x86_64-unknown-none
 
-# Linker and readelf. Defaults suit Linux/CI; a command-line override always
-# wins over these `:=` assignments. macOS's default `ld` is Apple's linker and
-# cannot link this image ("ld: unknown option: -n"), so on a Mac build with the
-# GNU cross-binutils:  make LD=x86_64-elf-ld READELF=x86_64-elf-readelf
-LD          := ld
-READELF     := readelf
+# Toolchain hooks. Defaults suit Linux/CI; a command-line override always wins
+# over these `:=` assignments. On macOS the default `ld` is Apple's linker
+# (cannot link this image: "ld: unknown option: -n"), there is no `readelf` or
+# `timeout`, and GRUB ships under an `x86_64-elf-` prefix. Build on a Mac with:
+#   make LD=x86_64-elf-ld READELF=x86_64-elf-readelf \
+#        GRUB_MKRESCUE=x86_64-elf-grub-mkrescue TIMEOUT=gtimeout
+LD            := ld
+READELF       := readelf
+GRUB_MKRESCUE := grub-mkrescue
+TIMEOUT       := timeout
 
 KERNEL      := build/kernel.bin
 ISO         := build/ziran.iso
@@ -42,6 +46,31 @@ ASM_OBJ     := $(patsubst boot/%.asm,build/%.o,$(ASM_SRC))
 # which is exactly what we want a boot test to catch.
 QEMU        := qemu-system-x86_64
 QEMU_FLAGS  := -m 128M -display none -no-reboot
+
+# UEFI firmware, for booting the rescue ISO on hosts without legacy-BIOS GRUB.
+# On Linux/CI grub-mkrescue embeds an i386-pc (legacy BIOS) El Torito image and
+# SeaBIOS -- QEMU's default firmware -- boots the ISO directly, so no firmware
+# flags are needed and QEMU_FIRMWARE stays empty. On macOS the only Homebrew
+# GRUB (x86_64-elf-grub) ships just the x86_64-efi platform, so the ISO is
+# UEFI-only; QEMU must be pointed at edk2/OVMF firmware via pflash. Enable that
+# path with QEMU_FIRMWARE=uefi (paths assume Homebrew's qemu edk2 build):
+#   make run-headless LD=x86_64-elf-ld READELF=x86_64-elf-readelf \
+#        GRUB_MKRESCUE=x86_64-elf-grub-mkrescue TIMEOUT=gtimeout QEMU_FIRMWARE=uefi
+QEMU_FIRMWARE      :=
+UEFI_CODE          := /opt/homebrew/share/qemu/edk2-x86_64-code.fd
+UEFI_VARS_TEMPLATE := /opt/homebrew/share/qemu/edk2-i386-vars.fd
+UEFI_VARS          := build/uefi-vars.fd
+
+# When QEMU_FIRMWARE=uefi, splice in the pflash pair (read-only code + a
+# writable per-build copy of the vars template) and make the run targets depend
+# on that writable copy. Both stay empty otherwise, so Linux/CI is untouched.
+QEMU_FW_FLAGS :=
+QEMU_FW_DEPS  :=
+ifeq ($(QEMU_FIRMWARE),uefi)
+    QEMU_FW_FLAGS := -drive if=pflash,format=raw,unit=0,readonly=on,file=$(UEFI_CODE) \
+                     -drive if=pflash,format=raw,unit=1,file=$(UEFI_VARS)
+    QEMU_FW_DEPS  := $(UEFI_VARS)
+endif
 
 # The line the kernel prints over serial once it reaches long mode. The headless
 # boot test passes iff this appears in the captured serial output.
@@ -89,23 +118,29 @@ $(ISO): $(KERNEL) grub/grub.cfg
 	@mkdir -p build/isofiles/boot/grub
 	cp $(KERNEL) build/isofiles/boot/kernel.bin
 	cp grub/grub.cfg build/isofiles/boot/grub/grub.cfg
-	grub-mkrescue -o $(ISO) build/isofiles 2>/dev/null
+	$(GRUB_MKRESCUE) -o $(ISO) build/isofiles 2>/dev/null
 	@echo "built $(ISO)"
 
 iso: $(ISO)
 
+# A writable, per-build copy of the UEFI vars store (the template is read-only in
+# the Homebrew prefix). Only built when the run targets ask for it via UEFI mode.
+$(UEFI_VARS):
+	@mkdir -p build
+	cp $(UEFI_VARS_TEMPLATE) $@
+
 # --- Running -----------------------------------------------------------------
-run: $(ISO)
-	$(QEMU) -cdrom $(ISO) -m 128M -serial stdio -no-reboot
+run: $(ISO) $(QEMU_FW_DEPS)
+	$(QEMU) $(QEMU_FW_FLAGS) -cdrom $(ISO) -m 128M -serial stdio -no-reboot
 
 # Headless boot smoke test. Boot for a few seconds with serial captured to a log,
 # then assert the kernel got far enough to print its long-mode marker. We do not
 # make the kernel self-exit -- a real OS should keep running -- so we bound the
 # run with `timeout` and judge success by what reached the serial line. This is
 # the "does it still boot?" check CI runs on every push.
-run-headless: $(ISO)
+run-headless: $(ISO) $(QEMU_FW_DEPS)
 	@mkdir -p build
-	@timeout 20 $(QEMU) -cdrom $(ISO) $(QEMU_FLAGS) -serial file:build/serial.log || true
+	@$(TIMEOUT) 20 $(QEMU) $(QEMU_FW_FLAGS) -cdrom $(ISO) $(QEMU_FLAGS) -serial file:build/serial.log || true
 	@echo "----- captured serial -----"; cat build/serial.log 2>/dev/null; echo "---------------------------"
 	@if grep -q "$(BOOT_MARKER)" build/serial.log 2>/dev/null; then \
 		echo "[boot test] PASS -- kernel reached long mode"; \
@@ -114,8 +149,8 @@ run-headless: $(ISO)
 	fi
 
 # Freeze at the first instruction and open a GDB stub on tcp::1234.
-debug: $(ISO)
-	$(QEMU) -cdrom $(ISO) -m 128M -serial stdio -s -S
+debug: $(ISO) $(QEMU_FW_DEPS)
+	$(QEMU) $(QEMU_FW_FLAGS) -cdrom $(ISO) -m 128M -serial stdio -s -S
 
 gdb:
 	gdb $(KERNEL) -ex "target remote :1234"
