@@ -14,6 +14,13 @@ ENTRY(_start)
 SECTIONS {
     . = 1M;
 
+    /* Mark the base of the loaded kernel image. The frame allocator (Milestone 6)
+     * reads this as an *address* to carve the kernel's own frames out of usable
+     * RAM, so it must never hand back memory the running kernel occupies. It sits
+     * at exactly 1 MiB -- the load address -- because nothing of ours precedes
+     * `.boot`. */
+    kernel_start = .;
+
     /* Boot: Multiboot header first, then the 32/64-bit boot trampoline code. */
     .boot :
     {
@@ -40,6 +47,14 @@ SECTIONS {
         *(.bss .bss.*)
         *(COMMON)
     }
+
+    /* Mark the end of the loaded kernel image, rounded up to a 4 KiB frame
+     * boundary so the first frame the allocator hands out starts clean. `.bss`
+     * is the last allocated section, and it already contains the boot page
+     * tables and the 16 KiB boot stack (reserved in boot.asm), so everything the
+     * running kernel needs falls inside [kernel_start, kernel_end). */
+    . = ALIGN(4K);
+    kernel_end = .;
 
     /* Rust/LLVM emit exception-handling and metadata sections we have no use for
      * in a `panic = "abort"` kernel. Drop them so they cannot bloat or misalign

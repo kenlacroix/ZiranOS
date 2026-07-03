@@ -34,8 +34,15 @@ mod vga_buffer;
 /// `extern "C"` gives it the C ABI the assembly expects, and `#[no_mangle]`
 /// keeps the symbol name exactly `kernel_main` so the linker can find it.
 /// It never returns — there is nowhere to return *to* — so the type is `!`.
+///
+/// `multiboot_info_addr` is the physical address of the Multiboot2 boot-
+/// information structure GRUB handed us. The boot code preserves the pointer
+/// GRUB leaves in `EBX` all the way into long mode (see `boot/boot.asm`, where
+/// `mov edi, ebx` stashes it), so by the System V AMD64 ABI it arrives here as
+/// the first argument in `RDI`. It is a physical address, safe to dereference
+/// only because the boot page tables identity-map the first 1 GiB.
 #[no_mangle]
-pub extern "C" fn kernel_main() -> ! {
+pub extern "C" fn kernel_main(multiboot_info_addr: u64) -> ! {
     vga_buffer::clear_screen();
 
     println!("Ziran OS  --  \u{81ea}\u{7136}");
@@ -48,6 +55,13 @@ pub extern "C" fn kernel_main() -> ! {
     // The serial line is what CI and headless QEMU read; mirror the banner there
     // so an automated boot test has something to assert on.
     serial_println!("Ziran OS booted: kernel_main reached, long mode active.");
+    // Milestone 6, step one: prove the Multiboot2 pointer survived the trip from
+    // GRUB through the mode-switch trampoline into Rust. This must be a non-null,
+    // sub-1-GiB physical address (GRUB places the structure in low memory).
+    serial_println!(
+        "[ok] Multiboot2 info structure received at {:#018x}",
+        multiboot_info_addr
+    );
 
     // Milestone 4: install the interrupt handlers, then prove they work by
     // deliberately triggering a breakpoint. A working IDT catches the `int3`,
