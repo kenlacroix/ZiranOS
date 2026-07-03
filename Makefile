@@ -33,6 +33,7 @@ LD            := ld
 READELF       := readelf
 GRUB_MKRESCUE := grub-mkrescue
 TIMEOUT       := timeout
+OBJCOPY       := objcopy   # macOS: OBJCOPY=x86_64-elf-objcopy (from x86_64-elf-binutils)
 
 KERNEL      := build/kernel.bin
 ISO         := build/ziran.iso
@@ -163,10 +164,11 @@ gdb:
 # web/kernel.bin; see web/README.md for serving and self-hosting the v86 files.
 web: $(KERNEL)
 	cp $(KERNEL) web/kernel.bin
-	@echo "copied $(KERNEL) -> web/kernel.bin"
+	$(OBJCOPY) -O binary $(KERNEL) web/kernel-v86.bin
+	@echo "staged web/kernel.bin (ELF, reference) and web/kernel-v86.bin (flat, v86 live boot)"
 	@echo "serve it:  cd web && python3 -m http.server 8000  # then open localhost:8000"
 
 clean:
 	cargo clean
 	rm -rf build
-	rm -f web/kernel.bin
+	rm -f web/kernel.bin web/kernel-v86.bin

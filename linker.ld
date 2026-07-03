@@ -42,6 +42,12 @@ SECTIONS {
         *(.data .data.*)
     }
 
+    /* End of the initialized, file-backed image (everything before .bss, which is
+     * zero-filled and not stored). The Multiboot1 header the browser emulator
+     * uses points its `load_end_addr` here: the flat binary produced by `objcopy`
+     * spans [kernel_start, data_end), and the loader zero-fills up to kernel_end. */
+    data_end = .;
+
     .bss :
     {
         *(.bss .bss.*)

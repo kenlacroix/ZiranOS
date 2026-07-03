@@ -16,10 +16,26 @@
 ; instead of silently triple-faulting.
 
 global _start
+global mb1_trampoline
 extern long_mode_start
 
 section .text
 bits 32
+
+; --- Browser (v86) entry: a Multiboot1 -> Multiboot2 trampoline --------------
+; GRUB/QEMU enter at `_start` via the Multiboot2 header and leave a real MB2 info
+; pointer in EBX. The web teaching tool's emulator (v86) only speaks Multiboot1,
+; so its header (in multiboot_header.asm) sends it here instead. v86 hands off
+; like an MB1 loader: EAX = 0x2BADB002, EBX -> an *MB1* info struct. Our kernel
+; only parses MB2, so rather than teach it a second format we forge an MB2
+; handoff: set EAX to the magic `check_multiboot` wants and point EBX at a static
+; MB2 structure describing v86's memory, then fall straight into `_start`. GRUB
+; never executes this (it jumps to `_start` directly).
+mb1_trampoline:
+    mov eax, 0x36d76289          ; the Multiboot2 loader magic check_multiboot wants
+    mov ebx, mb2_synth           ; our hand-built MB2 info structure (in .rodata)
+    jmp _start
+
 _start:
     ; GRUB does not give us a stack; establish one immediately.
     mov esp, stack_top
@@ -168,6 +184,43 @@ gdt64:
 .pointer:
     dw $ - gdt64 - 1                                  ; limit (size - 1)
     dq gdt64                                          ; base address
+
+; --- Static Multiboot2 info structure, for the browser trampoline only --------
+; Referenced by `mb1_trampoline` above. GRUB/QEMU never use this — they pass a
+; real map. This one describes v86's machine, which the page configures with
+; 64 MiB of RAM, so the Milestone 6 parser has a valid MB2 memory map to read in
+; the emulator (it will report ~63 MiB usable, versus QEMU's ~121 MiB). Layout
+; matches src/multiboot.rs: an 8-byte structure header, a type-6 memory-map tag
+; with 24-byte entries, then the end tag.
+align 8
+mb2_synth:
+    dd mb2_synth_end - mb2_synth        ; total_size
+    dd 0                                 ; reserved
+.mmap:
+    dd 6                                 ; tag type: memory map
+    dd .mmap_end - .mmap                 ; tag size
+    dd 24                                ; entry_size (authoritative stride)
+    dd 0                                 ; entry_version
+    ; low RAM: 0 .. 639 KiB, usable
+    dq 0x00000000
+    dq 0x0009FC00
+    dd 1                                 ; kind = usable
+    dd 0
+    ; EBDA + legacy hole: 639 KiB .. 1 MiB, reserved
+    dq 0x0009FC00
+    dq 0x00100000 - 0x0009FC00
+    dd 2                                 ; kind = reserved
+    dd 0
+    ; main RAM: 1 MiB .. 64 MiB, usable
+    dq 0x00100000
+    dq 0x04000000 - 0x00100000
+    dd 1                                 ; kind = usable
+    dd 0
+.mmap_end:
+    ; end tag (type 0, size 8); already 8-byte aligned here
+    dd 0
+    dd 8
+mb2_synth_end:
 
 ; --- Statically reserved page tables and the boot stack ----------------------
 

@@ -317,14 +317,15 @@ make debug      # boot frozen, attach GDB</code>
     wasm:"v86.wasm",
     bios:"seabios.bin",
     vga: "vgabios.bin",
-    kernel:"kernel.bin"
+    kernel:"kernel-v86.bin"
   };
-  // Live boot is gated OFF until the kernel is actually v86-loadable. Verified
-  // in libv86.js: v86 only scans for the Multiboot *1* magic (0x1BADB002) and
-  // its ELF loader is 32-bit only. Ziran is a 64-bit Multiboot *2* image, which
-  // v86 cannot load — so an honest page must NOT pretend it booted live. Once a
-  // small 32-bit Multiboot1 trampoline lands (see docs/planning/), boots it in a
-  // browser, and prints the serial marker, flip this to true.
+  // Live boot: still gated OFF, but the blocker has moved. The Multiboot1 "a.out
+  // kludge" header (boot/multiboot_header.asm) + 32-bit trampoline (boot.asm) DO
+  // work: v86 loads our flat binary (kernel-v86.bin) and runs our boot code. It
+  // dies one step later — this v86 build (0.5.420) is a 32-bit emulator with no
+  // long mode (verified: its CPUID advertises no leaf 0x80000001/LM bit, and the
+  // wasm CPU core has no EFER/long-mode support), so our 64-bit kernel bails at
+  // check_long_mode with "ERR: L". A live boot needs a 64-bit-capable emulator.
   var LIVE_READY = false;
   var src = function(f){ return BLOB + f; };
 
@@ -394,7 +395,7 @@ make debug      # boot frozen, attach GDB</code>
      ex:"<p>The keyboard controller offers a <em>scancode</em> at I/O port 0x60 and raises IRQ1. The interrupt controller (PIC) — which we had to reprogram so its interrupts don’t collide with CPU exceptions — delivers it; the handler reads the byte, translates it (US layout, with shift), echoes it, and acknowledges the controller so the next key can come. Forget that acknowledgement and the keyboard dies after exactly one press.</p>",
      links:[["src/keyboard.rs","keyboard.rs"],["src/pic.rs","pic.rs"],["docs/concepts/keyboard-and-pic.md","keyboard-and-pic.md (explainer)"]]},
     {n:"06", ms:"Milestone 6 · memory", title:"Learning what it has",
-     watch:"The line “[ok] physical memory: 121 MiB free in the frame allocator.”",
+     watch:"The “[ok] physical memory: … MiB free in the frame allocator” line (the amount depends on the machine — the browser emulator has 64 MiB).",
      q:"How does the kernel know how much RAM the machine has — can it just start using memory from address 0 upward?",
      a:"No. Physical memory is a patchwork: real RAM, firmware-reserved regions, memory-mapped devices, and plain holes, all interleaved. The kernel can’t safely probe it — reading a device register has side effects. So the bootloader (GRUB), which surveyed the machine before our code ran, hands over a map, and the kernel manages only the parts marked usable.",
      ex:"<p>Usable RAM is chopped into 4 KiB <em>frames</em>, and a <em>bitmap allocator</em> tracks each one with a single bit — free or used. It hands a frame out, takes it back, and — the part that makes it a real allocator and not a counter — returns the <em>same</em> frame on the next request after you free it. It carefully reserves the frames it must never give away: frame 0 (null), the kernel’s own image, and the boot structure itself. This is the bottom of the memory stack; paging and the heap are built directly on it.</p>",
@@ -512,7 +513,7 @@ make debug      # boot frozen, attach GDB</code>
   function simBoot(reason){
     mode="sim"; badge.textContent="reconstruction";
     var why = (reason==="notready")
-      ? "This is a <b>faithful reconstruction</b> of the exact serial/VGA output the real kernel produces — not yet the live emulator. v86 can only boot a 32-bit Multiboot 1 image, and Ziran is currently a 64-bit Multiboot 2 kernel, so a live boot needs a small 32-bit Multiboot1 trampoline (a tracked next step). "
+      ? "This is a <b>faithful reconstruction</b> of the exact serial/VGA output the real kernel produces — not the live emulator. A Multiboot1 trampoline (in the boot code) does get v86 to load and run our boot code, but v86 is a 32-bit emulator with no long mode, so the 64-bit kernel can’t start. The only browser emulator that could is Bochs-on-WASM, which is too heavy to be worth it — so the live kernel runs under QEMU instead (see the repo’s run instructions). "
       : "The live emulator couldn’t be reached (offline, blocked, or missing v86 files), so this is a <b>faithful reconstruction</b> of the same boot. ";
     $("mnote").innerHTML = why + "Every line below is what the kernel actually prints; typing echoes locally, the way the real keyboard driver echoes it.";
     stopSim();

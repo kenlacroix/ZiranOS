@@ -5,6 +5,45 @@ never actually booted the kernel, and the concrete fix.** Verify the fix in a
 real browser (needs iteration you can't do headlessly), so this is post-update
 work — the plan and the wiring are ready for it.
 
+## Outcome (built and tested — the trampoline works, but the wall moved)
+
+**Status: the Multiboot1 trampoline below was built, and it works — but a live
+64-bit boot in v86 is impossible for a reason the plan didn't anticipate.** Done
+2026-07 (verified in a real browser):
+
+- The trampoline (route B-ish): a **Multiboot1 a.out-kludge header** in
+  `boot/multiboot_header.asm` hands v86 a **flat binary** (`kernel-v86.bin`, built
+  by `make web` with `objcopy`) with explicit load addresses, and a 3-instruction
+  32-bit trampoline in `boot.asm` (`mb1_trampoline`) forges a Multiboot2 handoff
+  (sets EAX to the MB2 magic, points EBX at a **static synthetic MB2 memory map**
+  describing v86's 64 MiB) and falls into `_start`. GRUB/QEMU ignore all of it and
+  still boot via the MB2 header — verified: `make run-headless` stays green.
+- **It loads and runs.** v86 accepted the flat binary, jumped to the trampoline,
+  and executed our boot code all the way to `check_long_mode`. So the original
+  finding ("v86 can't even load our MB2 image") is *fixed*.
+- **The real wall: v86 has no long mode.** It printed `ERR: L` — our own
+  `check_long_mode` failure. v86 (0.5.420) is a 32-bit emulator (Pentium III-class,
+  SSE2, PAE — but no x86-64). Verified in `libv86.js`/`v86.wasm`: no CPUID leaf
+  `0x80000001`, no EFER MSR, no long-mode/REX handling. A 64-bit kernel simply
+  cannot run on it.
+
+### Why we stopped here (browser-emulator survey, 2026-07)
+
+The only browser-embeddable emulators that boot a *bare-metal* image are v86 and
+**Halfix** — both **32-bit only**. The only x86-64-capable option is **Bochs
+compiled to WASM** (as used by container2wasm), which is container-oriented, not a
+drop-in ISO widget: using it here would mean self-compiling Bochs with Emscripten,
+wiring our ISO + BIOS + display/serial, multi-MB assets, interpreter-slow, all
+verifiable only in a browser. Disproportionate for a hobby-OS teaching page.
+
+**Decision:** keep the trampoline as correct, QEMU-safe, documented
+infrastructure (it would light up unchanged the day a 64-bit browser emulator
+exists), leave `LIVE_READY = false`, and treat **native QEMU (`make run`) as the
+live path**. The page stays an honest, labelled reconstruction. Everything below
+is the original plan, preserved for that hypothetical future.
+
+---
+
 ## The finding (verified by reading v86's `libv86.js`, 0.5.420)
 
 v86 **cannot load our kernel image at all**, for two independent reasons:
