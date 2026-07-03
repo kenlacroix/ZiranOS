@@ -23,6 +23,13 @@ ARCH        := x86_64
 PROFILE     := release
 TARGET      := x86_64-unknown-none
 
+# Linker and readelf. Defaults suit Linux/CI; a command-line override always
+# wins over these `:=` assignments. macOS's default `ld` is Apple's linker and
+# cannot link this image ("ld: unknown option: -n"), so on a Mac build with the
+# GNU cross-binutils:  make LD=x86_64-elf-ld READELF=x86_64-elf-readelf
+LD          := ld
+READELF     := readelf
+
 KERNEL      := build/kernel.bin
 ISO         := build/ziran.iso
 RUST_LIB    := target/$(TARGET)/$(PROFILE)/libziran_kernel.a
@@ -64,13 +71,13 @@ $(RUST_LIB): $(wildcard src/*.rs) Cargo.toml
 # -z noexecstack : silence the executable-stack note
 $(KERNEL): $(ASM_OBJ) $(RUST_LIB) linker.ld
 	@mkdir -p build
-	ld -n -z noexecstack -T linker.ld -o $@ $(ASM_OBJ) $(RUST_LIB)
+	$(LD) -n -z noexecstack -T linker.ld -o $@ $(ASM_OBJ) $(RUST_LIB)
 	@echo "built $@"
 
 # Sanity-check the Multiboot2 magic without needing grub-file installed.
 # The first dword of the image must be 0xe85250d6, stored little-endian.
 check-header: $(KERNEL)
-	@magic=$$(readelf -x .boot $(KERNEL) | awk 'NR==3{print $$2}'); \
+	@magic=$$($(READELF) -x .boot $(KERNEL) | awk 'NR==3{print $$2}'); \
 	if [ "$$magic" = "d65052e8" ]; then \
 		echo "multiboot2 magic OK ($$magic)"; \
 	else \
