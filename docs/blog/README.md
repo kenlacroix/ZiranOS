@@ -10,6 +10,6 @@ story is the honest and interesting part — not "it works now."
 | 01 | The first 512 bytes | M1 bootloader | outline |
 | 02 | Handing off to Rust | M2 long mode | outline |
 | 03 | Making it talk back | M3 VGA text | outline |
-| 04 | Teaching it to fail gracefully | M4 interrupts | — |
+| 04 | [Teaching it to fail gracefully](04-teaching-it-to-fail-gracefully.md) | M4 interrupts | drafted |
 
 Posts are employer-agnostic and people-agnostic, matching the rest of the blog.

@@ -21,6 +21,7 @@
 
 use core::panic::PanicInfo;
 
+mod interrupts;
 mod serial;
 mod vga_buffer;
 
@@ -44,6 +45,19 @@ pub extern "C" fn kernel_main() -> ! {
     // The serial line is what CI and headless QEMU read; mirror the banner there
     // so an automated boot test has something to assert on.
     serial_println!("Ziran OS booted: kernel_main reached, long mode active.");
+
+    // Milestone 4: install the interrupt handlers, then prove they work by
+    // deliberately triggering a breakpoint. A working IDT catches the `int3`,
+    // reports it, and returns here so the kernel keeps running — the difference
+    // between "fails gracefully" and "silently reboots".
+    interrupts::init();
+    println!();
+    println!("triggering a test breakpoint (int3)...");
+    // SAFETY: `int3` raises #BP, which our IDT handles and returns from.
+    unsafe {
+        core::arch::asm!("int3");
+    }
+    println!("[ok] survived the breakpoint -- interrupts work, execution resumed");
 
     println!();
     println!("nothing left to do yet -- halting.");

@@ -20,9 +20,15 @@ stand right now.
 ## Current status
 
 The kernel boots via a **hand-written Multiboot2 + long-mode transition** in
-assembly and hands off to a `no_std` Rust kernel that prints to the screen.
-That covers milestones 1–3. Everything assembles, compiles, and links on stable
-Rust; CI boots the image under headless QEMU on every push.
+assembly, hands off to a `no_std` Rust kernel that prints to the screen, and
+installs interrupt handlers so a fault is reported instead of silently rebooting
+(it catches a deliberate breakpoint and keeps running). That covers milestones
+1–4. Everything assembles, compiles, and links on stable Rust; CI boots the
+image under headless QEMU on every push.
+
+New here? Start with the plain-language explainers in
+[`docs/concepts/`](docs/concepts/) — e.g. [interrupts](docs/concepts/interrupts.md),
+written from first principles alongside the code.
 
 | Range | State |
 |------|-------|
@@ -30,7 +36,8 @@ Rust; CI boots the image under headless QEMU on every push.
 | M1 Bootloader (Multiboot2, 32-bit entry) | ✅ done |
 | M2 Long mode + Rust entry | ✅ done |
 | M3 VGA text output | ✅ done |
-| M4+ interrupts, memory, scheduling, shell, FS | ⬜ next |
+| M4 GDT/IDT/interrupts | ✅ done |
+| M5+ keyboard, memory, scheduling, shell, FS | ⬜ next |
 
 ## What happens when it boots
 
@@ -53,15 +60,20 @@ boot/                   hand-written boot assembly
   multiboot_header.asm    the Multiboot2 header GRUB looks for
   boot.asm                32-bit entry: CPU checks, page tables, long-mode switch
   long_mode_init.asm      64-bit entry: segment setup, call kernel_main
+  isr.asm                 256 interrupt entry stubs + the shared trampoline
 src/                    the no_std Rust kernel
   lib.rs                  kernel_main, panic handler, halt loop
   vga_buffer.rs           VGA text-mode writer + println! macros
   serial.rs               16550 UART (COM1) writer — what CI reads back
+  interrupts.rs           the IDT and the exception/interrupt dispatcher
 linker.ld               places the Multiboot header first, kernel at 1 MiB
 grub/grub.cfg           one-entry GRUB menu for the bootable ISO
 Makefile                the whole build/run/debug pipeline, spelled out
 .github/workflows/ci.yml build + headless boot smoke test on every push
+CLAUDE.md               the per-milestone workflow (adapted from gstack)
+docs/concepts/          plain-language explainers, written to teach
 docs/blog/              the narrative, one post per milestone
+docs/MILESTONE_CHECKLIST.md  the loop every milestone runs
 ```
 
 ## Building and running
