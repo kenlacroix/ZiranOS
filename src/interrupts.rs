@@ -15,7 +15,10 @@
 //! The per-vector entry stubs live in `boot/isr.asm`; this file is the Rust half
 //! that builds the table and decides what each fault *means*.
 
-use crate::{hlt_loop, println, serial_println};
+use crate::{hlt_loop, keyboard, pic, print, println, serial_println};
+
+/// The vector the keyboard's IRQ1 is remapped to (see `pic`): 0x20 + 1 = 0x21.
+const KEYBOARD_VECTOR: usize = pic::PIC1_OFFSET as usize + 1;
 
 /// The exact register state our assembly stub (`isr_common` in boot/isr.asm)
 /// leaves on the stack, in ascending memory order. `interrupt_dispatch` receives
@@ -225,9 +228,25 @@ pub extern "C" fn interrupt_dispatch(ctx: &InterruptContext) {
             halt();
         }
 
-        // Everything else in the exception range: report and halt. Recovering
-        // from these needs machinery we haven't built; halting legibly is the
-        // milestone's actual goal ("fail gracefully", not "fail invisibly").
+        // Keyboard IRQ (Milestone 5). Read the scancode, echo any character it
+        // produced, and — crucially — send the PIC an end-of-interrupt so it
+        // will deliver the next keystroke. Then return (iretq) to resume.
+        KEYBOARD_VECTOR => {
+            if let Some(c) = keyboard::handle_interrupt() {
+                print!("{}", c);
+            }
+            pic::send_eoi(1);
+        }
+
+        // Any other vector in the PIC's range (0x20..0x2F) that we didn't
+        // unmask: almost certainly a *spurious* interrupt, which real PICs emit
+        // on IRQ7/IRQ15 when a line glitches. Do NOT halt over one, and — key
+        // detail — do NOT send an EOI for a spurious IRQ, so we send none here.
+        v if (pic::PIC1_OFFSET as usize..pic::PIC1_OFFSET as usize + 16).contains(&v) => {}
+
+        // Everything else: report and halt. In the exception range this is a
+        // real bug the kernel should surface, not hide. Halting legibly is the
+        // goal ("fail gracefully", not "fail invisibly").
         _ => {
             fatal_header(ctx);
             halt();

@@ -12,8 +12,8 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started
 | 2 | Long mode + Rust entry | ✅ | PAE + EFER.LME + CR0.PG, 64-bit GDT, far jump; `long_mode_init.asm` calls `kernel_main`. |
 | 3 | VGA text output | ✅ | `vga_buffer.rs` writes 0xb8000 directly, with scrolling + `println!`. Serial mirror in `serial.rs`. |
 | 4 | GDT / IDT / interrupts | ✅ | IDT wired for all 256 vectors (`boot/isr.asm` + `src/interrupts.rs`); `#BP` recovers, `#PF`/others report (CR2 + decoded error) and halt. `int3` self-test. See `docs/concepts/interrupts.md`. IST/TSS deferred. |
-| 5 | Keyboard input (PS/2) | ⬜ | Next. Assign a vector to the keyboard IRQ, program the PIC, and enable hardware interrupts (`sti`) for the first time. |
-| 6 | Physical memory management | ⬜ | Will consume the Multiboot2 memory map (pointer already stashed in RDI at handoff). |
+| 5 | Keyboard input (PS/2) | ✅ | PIC remapped to 0x20–0x2F + masked to keyboard only (`src/pic.rs`); IRQ1 handler reads scancodes and echoes (`src/keyboard.rs`, US QWERTY + shift); `sti` enabled; backspace works; spurious-IRQ safe. See `docs/concepts/keyboard-and-pic.md`. |
+| 6 | Physical memory management | ⬜ | Next. Consume the Multiboot2 memory map (pointer already stashed in RDI at handoff) and build a frame allocator over usable RAM. |
 | 7 | Paging / virtual memory | ⬜ | |
 | 8 | Heap allocator (`alloc`) | ⬜ | |
 | 9 | Timer + scheduling | ⬜ | |
@@ -33,16 +33,15 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started
 - **Boots under QEMU:** exercised by CI (`make run-headless`), which asserts the
   kernel's long-mode serial marker appears.
 
-## Next up (Milestone 5 — keyboard input)
+## Next up (Milestone 6 — physical memory management)
 
-1. Program the 8259 PIC: remap the IRQs off the CPU's exception vectors (they
-   collide by default) and unmask the keyboard line.
-2. Add a handler for the keyboard IRQ vector that reads the scancode from the
-   PS/2 data port (0x60).
-3. Enable hardware interrupts for the first time (`sti`) — until now only
-   synchronous exceptions could fire.
-4. Translate scancodes to characters and echo them to the screen.
+1. Parse the Multiboot2 boot information structure (its address is already in
+   RDI at the `kernel_main` handoff) to find the memory map.
+2. Walk the memory-map entries to learn which physical regions are usable RAM
+   vs. reserved.
+3. Build a frame allocator that hands out and reclaims 4 KiB physical frames,
+   skipping the regions the kernel and boot structures already occupy.
 
-Deferred from M4 (fold in when robustness matters): a proper Rust-built GDT with
-a TSS + IST stack for the double-fault handler, so even a stack overflow reports
-instead of triple-faulting. The `ist` field in each IDT entry is already stubbed.
+Deferred (fold in when robustness matters): a proper Rust-built GDT with a TSS +
+IST stack for the double-fault handler, so even a stack overflow reports instead
+of triple-faulting. The `ist` field in each IDT entry is already stubbed.

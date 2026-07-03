@@ -22,9 +22,10 @@ stand right now.
 The kernel boots via a **hand-written Multiboot2 + long-mode transition** in
 assembly, hands off to a `no_std` Rust kernel that prints to the screen, and
 installs interrupt handlers so a fault is reported instead of silently rebooting
-(it catches a deliberate breakpoint and keeps running). That covers milestones
-1–4. Everything assembles, compiles, and links on stable Rust; CI boots the
-image under headless QEMU on every push.
+(it catches a deliberate breakpoint and keeps running), and takes keyboard input
+over the PS/2 controller — typing echoes to the screen, interrupt-driven. That
+covers milestones 1–5. Everything assembles, compiles, and links on stable Rust;
+CI boots the image under headless QEMU on every push.
 
 New here? Start with the plain-language explainers in
 [`docs/concepts/`](docs/concepts/) — e.g. [interrupts](docs/concepts/interrupts.md),
@@ -37,7 +38,8 @@ written from first principles alongside the code.
 | M2 Long mode + Rust entry | ✅ done |
 | M3 VGA text output | ✅ done |
 | M4 GDT/IDT/interrupts | ✅ done |
-| M5+ keyboard, memory, scheduling, shell, FS | ⬜ next |
+| M5 keyboard input (PS/2) | ✅ done |
+| M6+ memory, scheduling, shell, FS | ⬜ next |
 
 ## What happens when it boots
 
@@ -66,6 +68,9 @@ src/                    the no_std Rust kernel
   vga_buffer.rs           VGA text-mode writer + println! macros
   serial.rs               16550 UART (COM1) writer — what CI reads back
   interrupts.rs           the IDT and the exception/interrupt dispatcher
+  port.rs                 shared port-mapped I/O (inb/outb)
+  pic.rs                  8259 PIC: remap, mask, end-of-interrupt
+  keyboard.rs             PS/2 scancode -> character translation
 linker.ld               places the Multiboot header first, kernel at 1 MiB
 grub/grub.cfg           one-entry GRUB menu for the bootable ISO
 Makefile                the whole build/run/debug pipeline, spelled out

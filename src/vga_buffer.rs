@@ -69,6 +69,7 @@ impl Writer {
     fn write_byte(&mut self, byte: u8) {
         match byte {
             b'\n' => self.new_line(),
+            0x08 => self.backspace(),
             byte => {
                 if self.col >= BUFFER_WIDTH {
                     self.new_line();
@@ -113,6 +114,18 @@ impl Writer {
         }
     }
 
+    /// Move the cursor back one cell and blank it — what Backspace should look
+    /// like. Wraps to the end of the previous row if at the start of a line.
+    fn backspace(&mut self) {
+        if self.col > 0 {
+            self.col -= 1;
+        } else if self.row > 0 {
+            self.row -= 1;
+            self.col = BUFFER_WIDTH - 1;
+        }
+        self.put_cell(self.row, self.col, b' ', self.attr);
+    }
+
     fn clear(&mut self) {
         for row in 0..BUFFER_HEIGHT {
             self.blank_row(row);
@@ -129,7 +142,7 @@ impl Write for Writer {
             // ASCII (e.g. multi-byte UTF-8 from our banner) becomes a filled box
             // so we never emit an undefined glyph.
             let out = match byte {
-                0x20..=0x7e | b'\n' => byte,
+                0x20..=0x7e | b'\n' | 0x08 => byte,
                 _ => 0xfe,
             };
             self.write_byte(out);

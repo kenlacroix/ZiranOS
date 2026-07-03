@@ -22,6 +22,9 @@
 use core::panic::PanicInfo;
 
 mod interrupts;
+mod keyboard;
+mod pic;
+mod port;
 mod serial;
 mod vga_buffer;
 
@@ -59,9 +62,23 @@ pub extern "C" fn kernel_main() -> ! {
     }
     println!("[ok] survived the breakpoint -- interrupts work, execution resumed");
 
+    // Milestone 5: bring up the keyboard. Remap + mask the PIC first, THEN
+    // enable hardware interrupts — doing it in the other order could let a stray
+    // IRQ fire into an exception vector before the PIC is configured.
+    pic::init();
+    serial_println!("Ziran OS: PIC remapped, keyboard IRQ unmasked.");
     println!();
-    println!("nothing left to do yet -- halting.");
+    println!("keyboard is live -- type something:");
+    println!();
 
+    // SAFETY: the IDT (M4) and PIC are configured; it is now safe to let
+    // hardware interrupts through. `sti` sets the interrupt flag.
+    unsafe {
+        core::arch::asm!("sti", options(nomem, nostack));
+    }
+
+    // Idle. The CPU halts until an interrupt (a keystroke) wakes it, the handler
+    // echoes the character, and `iretq` returns us right back here to halt again.
     hlt_loop();
 }
 

@@ -11,5 +11,6 @@ story is the honest and interesting part — not "it works now."
 | 02 | Handing off to Rust | M2 long mode | outline |
 | 03 | Making it talk back | M3 VGA text | outline |
 | 04 | [Teaching it to fail gracefully](04-teaching-it-to-fail-gracefully.md) | M4 interrupts | drafted |
+| 05 | [It listens now](05-it-listens-now.md) | M5 keyboard | drafted |
 
 Posts are employer-agnostic and people-agnostic, matching the rest of the blog.
