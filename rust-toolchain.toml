@@ -1,0 +1,13 @@
+# Pin the toolchain so the build is reproducible for anyone who clones the repo
+# (and for CI). We ride stable: the bare-metal `x86_64-unknown-none` target is
+# Tier-2 and ships precompiled, so nothing here needs nightly yet.
+#
+# The day a milestone genuinely needs a nightly-only feature (e.g. a custom
+# target JSON rebuilt via `build-std`, or `#![feature(...)]`), flip `channel`
+# to a dated nightly and add the `rust-src` component below. Until then, stable
+# keeps the barrier to reproducing a boot as low as possible.
+[toolchain]
+channel = "stable"
+components = ["rust-src", "llvm-tools"]
+targets = ["x86_64-unknown-none"]
+profile = "minimal"

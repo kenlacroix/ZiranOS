@@ -1,0 +1,50 @@
+name: build-and-boot
+
+# The whole point of this workflow is a single, honest signal: "still boots".
+# Every push assembles the boot code, compiles the kernel, links the image, and
+# then actually boots it under a headless QEMU, asserting the kernel prints its
+# long-mode marker over the serial line.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-and-boot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable) + bare-metal target
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup target add x86_64-unknown-none
+          rustup component add rust-src llvm-tools
+          rustc --version
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+
+      - name: Install build + boot tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y nasm qemu-system-x86 grub-pc-bin grub-common xorriso mtools
+
+      - name: Build kernel image
+        run: make
+
+      - name: Verify Multiboot2 header
+        run: make check-header
+
+      - name: Build bootable ISO
+        run: make iso
+
+      - name: Headless boot test
+        run: make run-headless

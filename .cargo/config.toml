@@ -1,0 +1,14 @@
+# Default every `cargo build` in this repo to the bare-metal target. This is a
+# Tier-2 target that ships a precompiled `core`/`alloc`, so the kernel builds on
+# stable Rust with no `-Z build-std` and no nightly required.
+#
+# `x86_64-unknown-none` is deliberately hostile to accidents that would break a
+# kernel: the red zone is disabled (interrupts would otherwise corrupt it) and
+# SSE/MMX are off until *we* choose to enable them in the boot code.
+[build]
+target = "x86_64-unknown-none"
+
+[unstable]
+# (Intentionally empty.) If you later switch to a custom target JSON that needs
+# core rebuilt, this is where `build-std = ["core", "alloc"]` would go — which is
+# also the moment you would move to a nightly toolchain. Documented, not used.

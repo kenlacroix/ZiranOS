@@ -1,0 +1,13 @@
+# Rust / Cargo build output
+/target
+**/*.rs.bk
+
+# Our own build artifacts (objects, linked kernel, ISO, isofiles staging)
+/build
+
+# Editor / OS noise
+.DS_Store
+*.swp
+*~
+.idea/
+.vscode/

@@ -1,0 +1,31 @@
+[package]
+name = "ziran_kernel"
+version = "0.1.0"
+edition = "2021"
+authors = ["Ziran OS"]
+description = "A hobbyist, from-scratch x86_64 operating system kernel, built to understand every layer beneath the abstractions."
+license = "MIT"
+publish = false
+
+# The kernel is compiled to a static library (libziran_kernel.a). Our
+# hand-written boot assembly is the real entry point; it hands control to the
+# `kernel_main` symbol exported from this staticlib. See linker.ld + Makefile.
+[lib]
+name = "ziran_kernel"
+crate-type = ["staticlib"]
+
+[dependencies]
+# Spinning locks that work in a no_std / interrupt context, without an OS
+# underneath to provide real mutexes. This is the one external crate we lean
+# on early; it is small, auditable, and touches no I/O.
+spin = "0.9"
+
+# Kernels cannot unwind: a panic must abort, not walk the stack looking for
+# landing pads that do not exist. Turning unwinding off also means we do not
+# need to define an `eh_personality` language item.
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+opt-level = 2

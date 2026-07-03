@@ -1,0 +1,107 @@
+# Ziran OS
+
+> **自然 (zìrán)** — "self-so": that which arises naturally, without external forcing.
+
+A hobbyist, from-scratch x86_64 operating system, written to understand what is
+actually happening beneath every abstraction usually trusted on faith. There is
+no OS underneath it and no abstraction in it that wasn't deliberately chosen.
+
+It is **not** meant for real-world use. Success is measured in understanding
+gained, in a system that boots and eventually runs a simple file manager, and in
+an honest public trail of how it was built — including the parts that didn't
+work.
+
+See **[PLAN.md](PLAN.md)** for the full vision, technical decisions, and
+milestone roadmap, and **[STATUS.md](STATUS.md)** for where things actually
+stand right now.
+
+---
+
+## Current status
+
+The kernel boots via a **hand-written Multiboot2 + long-mode transition** in
+assembly and hands off to a `no_std` Rust kernel that prints to the screen.
+That covers milestones 1–3. Everything assembles, compiles, and links on stable
+Rust; CI boots the image under headless QEMU on every push.
+
+| Range | State |
+|------|-------|
+| M0 Toolchain & scaffolding | ✅ done |
+| M1 Bootloader (Multiboot2, 32-bit entry) | ✅ done |
+| M2 Long mode + Rust entry | ✅ done |
+| M3 VGA text output | ✅ done |
+| M4+ interrupts, memory, scheduling, shell, FS | ⬜ next |
+
+## What happens when it boots
+
+```
+GRUB (Multiboot2)
+  → boot/boot.asm            32-bit: verify CPU, build page tables, enter long mode
+  → boot/long_mode_init.asm  64-bit: load segments, call into Rust
+  → kernel_main (src/lib.rs) print a banner to VGA + serial, then halt
+```
+
+Every step is readable and hand-written; there is no `bootimage`/`build.rs`
+magic hiding the handoff. The one deliberate convenience is letting GRUB do the
+real-mode dance so the interesting kernel work isn't gated on debugging a raw
+boot sector — the trade-off is argued in [PLAN.md §4](PLAN.md).
+
+## Repository layout
+
+```
+boot/                   hand-written boot assembly
+  multiboot_header.asm    the Multiboot2 header GRUB looks for
+  boot.asm                32-bit entry: CPU checks, page tables, long-mode switch
+  long_mode_init.asm      64-bit entry: segment setup, call kernel_main
+src/                    the no_std Rust kernel
+  lib.rs                  kernel_main, panic handler, halt loop
+  vga_buffer.rs           VGA text-mode writer + println! macros
+  serial.rs               16550 UART (COM1) writer — what CI reads back
+linker.ld               places the Multiboot header first, kernel at 1 MiB
+grub/grub.cfg           one-entry GRUB menu for the bootable ISO
+Makefile                the whole build/run/debug pipeline, spelled out
+.github/workflows/ci.yml build + headless boot smoke test on every push
+docs/blog/              the narrative, one post per milestone
+```
+
+## Building and running
+
+Requires: a Rust toolchain (pinned to stable in `rust-toolchain.toml`), `nasm`,
+`ld`, and for booting `qemu-system-x86_64`, `grub-mkrescue`, and `xorriso`.
+
+```sh
+rustup target add x86_64-unknown-none   # one-time; also in rust-toolchain.toml
+
+make               # assemble + compile + link  -> build/kernel.bin
+make check-header  # sanity-check the Multiboot2 magic
+make iso           # build a bootable ISO         -> build/ziran.iso
+make run           # boot it in a QEMU window
+make run-headless  # boot with no window; pass iff the long-mode marker appears
+```
+
+### Debugging a crash
+
+A bad kernel triple-faults and the machine just reboots with no stack trace —
+the single biggest source of stalled momentum in OS work. Two mitigations:
+
+```sh
+make debug   # boots QEMU frozen, with a GDB stub on :1234
+make gdb     # in another terminal: attach GDB to it
+```
+
+## Notes on this environment
+
+The image is verified here to **assemble, compile, and link** into a valid
+Multiboot2 ELF (magic + checksum checked). The interactive QEMU boot is exercised
+by CI (GitHub runners have QEMU + GRUB); it had not been run in the authoring
+sandbox, where QEMU wasn't installable.
+
+## Resources leaned on
+
+- The OSDev wiki
+- Philipp Oppermann's *Writing an OS in Rust* series
+- The Intel SDM (Vol. 3, system programming) for the long-mode transition
+
+## License
+
+**MIT** — see [LICENSE-MIT](LICENSE-MIT).
