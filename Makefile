@@ -77,7 +77,7 @@ endif
 # reached long mode (Milestone 2); MILESTONE_MARKER proves the current milestone's
 # subsystem came up. Both must appear in the captured serial output for a pass.
 BOOT_MARKER      := Ziran OS booted
-MILESTONE_MARKER := M6: frame allocator online
+MILESTONE_MARKER := M7: paging enabled
 
 CARGO_FLAGS := --release
 ifeq ($(PROFILE),debug)
