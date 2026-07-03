@@ -217,8 +217,8 @@
       <h1>Boot a real OS in this tab — then learn <em>how every layer works</em>.</h1>
       <p class="lead">No Linux underneath. This is a hand-written kernel — assembly boot code, a <span class="mono">no_std</span> Rust core, its own interrupt and keyboard handling — running on a tiny PC emulator right here. The tour beside it asks you to guess what happens, then shows you why.</p>
       <div class="meta">
-        <span class="tag"><b>Milestones 0–5</b> booted</span>
-        <span class="tag">from <b>512 bytes</b> to a live keyboard</span>
+        <span class="tag"><b>Milestones 0–6</b> booted</span>
+        <span class="tag">from <b>512 bytes</b> to its own memory allocator</span>
         <span class="tag">every claim links to <b>real source</b></span>
       </div>
     </div>
@@ -344,6 +344,9 @@ make debug      # boot frozen, attach GDB</code>
     {t:"[ok] VGA text output online (writing straight to 0xb8000)", c:"ok",
      note:"Every character on this screen is two bytes written to physical address 0xb8000 — the VGA text buffer — one for the glyph, one for the color. No driver, no syscall, no library.",
      link:{f:"src/vga_buffer.rs",l:"vga_buffer.rs"}},
+    {t:"[ok] physical memory: 121 MiB free in the frame allocator", c:"ok",
+     note:"The kernel just parsed the memory map GRUB left it, found the usable RAM, and stood up a bitmap allocator that hands out physical memory 4 KiB at a time. The detailed map dump and the alloc/free self-test go to the serial log; this is the one-line headline. Before this, the kernel had no idea how much RAM existed.",
+     link:{f:"src/frame_allocator.rs",l:"frame_allocator.rs"}},
     {t:"", c:"blank"},
     {t:"triggering a test breakpoint (int3)...", c:"info",
      note:"The kernel is about to break itself on purpose. int3 raises exception vector 3 — a “breakpoint.” On a kernel with no handler, an exception cascades to a triple fault and the machine silently reboots.",
@@ -390,10 +393,16 @@ make debug      # boot frozen, attach GDB</code>
      a:"Neither loop nor poll. The CPU is halted — genuinely asleep. Pressing a key raises a hardware interrupt (IRQ1) that wakes it just long enough to read the key and echo it, then it halts again. That’s how a real OS idles at near-zero power.",
      ex:"<p>The keyboard controller offers a <em>scancode</em> at I/O port 0x60 and raises IRQ1. The interrupt controller (PIC) — which we had to reprogram so its interrupts don’t collide with CPU exceptions — delivers it; the handler reads the byte, translates it (US layout, with shift), echoes it, and acknowledges the controller so the next key can come. Forget that acknowledgement and the keyboard dies after exactly one press.</p>",
      links:[["src/keyboard.rs","keyboard.rs"],["src/pic.rs","pic.rs"],["docs/concepts/keyboard-and-pic.md","keyboard-and-pic.md (explainer)"]]},
-    {n:"06", ms:"what’s next", title:"You’ve reached the current edge",
-     watch:"This is as far as the OS is built — milestone 5 of 12.",
-     q:"So what turns “a machine that echoes keys” into “an operating system”?",
-     a:"The next layers: knowing what memory exists, managing it, running more than one thing at once, a shell, and files. Each is a milestone below — and each is meant to be built and understood, not just shipped.",
+    {n:"06", ms:"Milestone 6 · memory", title:"Learning what it has",
+     watch:"The line “[ok] physical memory: 121 MiB free in the frame allocator.”",
+     q:"How does the kernel know how much RAM the machine has — can it just start using memory from address 0 upward?",
+     a:"No. Physical memory is a patchwork: real RAM, firmware-reserved regions, memory-mapped devices, and plain holes, all interleaved. The kernel can’t safely probe it — reading a device register has side effects. So the bootloader (GRUB), which surveyed the machine before our code ran, hands over a map, and the kernel manages only the parts marked usable.",
+     ex:"<p>Usable RAM is chopped into 4 KiB <em>frames</em>, and a <em>bitmap allocator</em> tracks each one with a single bit — free or used. It hands a frame out, takes it back, and — the part that makes it a real allocator and not a counter — returns the <em>same</em> frame on the next request after you free it. It carefully reserves the frames it must never give away: frame 0 (null), the kernel’s own image, and the boot structure itself. This is the bottom of the memory stack; paging and the heap are built directly on it.</p>",
+     links:[["src/frame_allocator.rs","frame_allocator.rs"],["src/multiboot.rs","multiboot.rs"],["docs/concepts/physical-memory.md","physical-memory.md (explainer)"]]},
+    {n:"07", ms:"what’s next", title:"You’ve reached the current edge",
+     watch:"This is as far as the OS is built — milestone 6 of 12.",
+     q:"So what turns “a machine that knows its own memory” into “an operating system”?",
+     a:"The next layers: virtual memory (paging), a heap so Rust’s Vec/Box/String work at all, running more than one thing at once, a shell, and files. Each is a milestone below — and each is meant to be built and understood, not just shipped.",
      ex:"<p>The honest goal of this project isn’t a product; it’s understanding, with a public trail of how it was built — including the dead ends. This page exists so that trail is something you can <em>boot and poke at</em>, not just read. If you take one idea away: an OS is not magic, it’s a stack of small, knowable mechanisms, each of which you can hand-write.</p>",
      links:[["STATUS.md","the milestone tracker"],["docs/blog","the build log"]]}
   ];
@@ -402,8 +411,8 @@ make debug      # boot frozen, attach GDB</code>
     ["0–3","Boot, long mode, VGA text","done"],
     ["4","Interrupts / exceptions","done"],
     ["5","Keyboard input","done"],
-    ["6","Physical memory","now"],
-    ["7","Paging / virtual memory","todo"],
+    ["6","Physical memory","done"],
+    ["7","Paging / virtual memory","now"],
     ["8","Heap (Vec, Box, String)","todo"],
     ["9","Timer + scheduling","todo"],
     ["10","A shell","todo"],

@@ -103,6 +103,12 @@ pub extern "C" fn kernel_main(multiboot_info_addr: u64) -> ! {
         frame_allocator::init(multiboot_info_addr, kernel_start_addr, kernel_end_addr);
     }
     frame_allocator::self_test();
+    // Mirror the headline to the screen (the map dump and self-test detail go to
+    // serial only, to keep the VGA console readable).
+    println!(
+        "[ok] physical memory: {} MiB free in the frame allocator",
+        frame_allocator::free_frame_count() / 256
+    );
 
     // Milestone 4: install the interrupt handlers, then prove they work by
     // deliberately triggering a breakpoint. A working IDT catches the `int3`,

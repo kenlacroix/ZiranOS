@@ -61,8 +61,10 @@ where the System V C ABI passes a function's first argument. So the moment
 pub extern "C" fn kernel_main(multiboot_info_addr: u64) -> !
 ```
 
-(That signature change is one of the prerequisite steps in the Milestone 6
-plan — today's `src/lib.rs` still takes no argument.)
+As of Milestone 6 that signature is in place. The assembly needed no change at
+all: `boot/boot.asm` already stashed GRUB's pointer in `EDI` (with an eye to this
+day), so it was waiting in `RDI` the whole time — growing the Rust parameter was
+enough to catch it.
 
 ## Reading the structure: why it's a chain of tags
 
