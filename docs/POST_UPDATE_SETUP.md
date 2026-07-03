@@ -265,12 +265,15 @@ Ziran OS booted: kernel_main reached, long mode active.
 [boot test] PASS -- kernel reached long mode
 ```
 
-> That's a mouthful to type. Since the Makefile reads all five as environment
-> defaults, you can export them once per shell and then just `make run-headless`:
+> That's a mouthful to type. Note it must be passed as **`make` arguments**, not
+> shell exports: the Makefile assigns these with `:=`, and make only lets a
+> command-line argument (not an environment variable) override a `:=` default. So
+> wrap the whole invocation in a shell alias:
 >
 > ```sh
-> export LD=x86_64-elf-ld READELF=x86_64-elf-readelf \
->        GRUB_MKRESCUE=x86_64-elf-grub-mkrescue TIMEOUT=gtimeout QEMU_FIRMWARE=uefi
+> alias zmake='make LD=x86_64-elf-ld READELF=x86_64-elf-readelf \
+>   GRUB_MKRESCUE=x86_64-elf-grub-mkrescue TIMEOUT=gtimeout QEMU_FIRMWARE=uefi'
+> # then: zmake run-headless   /   zmake iso   /   zmake debug
 > ```
 
 The `error: no suitable video mode found` and `WARNING: no console will be
@@ -337,7 +340,9 @@ make run-headless $O   # no window; asserts the boot marker
 make debug        $O   # freeze for GDB on :1234
 ```
 
-(Or `export` the block once, as shown above, and run the bare `make` targets.)
+(Or wrap them in the `zmake` alias shown above and run `zmake iso`, etc. These
+must be `make` arguments, not shell exports — the Makefile's `:=` defaults only
+yield to command-line overrides.)
 
 ---
 
