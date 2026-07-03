@@ -43,6 +43,17 @@ bare-metal OS only needs the parts below. Each milestone flows:
 | Reflect | `/retro` | What broke, how long it took, the actual fix — feeds the blog |
 | Reflect | `/document-milestone` | Update STATUS.md and draft the milestone's blog post |
 
+There is also a conditional security skill, `/red-team` (adapted from gstack's
+`/cso`): adversarial self-testing of the kernel's own boundaries, to *learn* what
+they enforce — **not** to harden. It only applies once a boundary exists (ring-3
+userspace/syscalls, or a filesystem; PLAN.md §8). Skip it with a one-line reason
+otherwise.
+
+**This loop is mandatory for every milestone**, not per-taste. The mechanical
+checklist lives in [docs/MILESTONE_CHECKLIST.md](docs/MILESTONE_CHECKLIST.md) —
+copy its block into each milestone's blog draft and work through it. That is how
+a milestone is considered done here.
+
 Skills live in `.claude/skills/` and travel with the repo — no global install
 needed. Invoke them by name (e.g. `/investigate`).
 

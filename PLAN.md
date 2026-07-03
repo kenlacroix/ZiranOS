@@ -12,7 +12,16 @@ A hobbyist, from-scratch operating system built to understand what's actually ha
 - A public trail of blog posts documenting the process, including the parts that didn't work
 - A body of work that sits credibly next to app-level projects (MoodHaven, StillHaven, Steward) as evidence of range — from PWA down to bare metal
 
-**Explicit non-goals:** POSIX compliance, real hardware support beyond QEMU/common virtualization, networking stack (beyond a stretch-goal stub), security hardening, multi-user support, or anyone besides the author actually using it.
+**Explicit non-goals:** POSIX compliance, real hardware support beyond QEMU/common virtualization, networking stack (beyond a stretch-goal stub), *production* security hardening, multi-user support, or anyone besides the author actually using it.
+
+> **A deliberate refinement (added later):** *production security hardening*
+> stays a non-goal — this OS will never be defensible against a real adversary,
+> and that's fine. But **adversarial self-testing is now an explicit learning
+> track**: once there's an actual privilege boundary or on-disk data to protect
+> (userspace/syscalls, a filesystem), attacking your *own* kernel — trying to
+> escape ring 3, read memory you shouldn't, corrupt the syscall boundary — is
+> one of the best ways to understand what those boundaries really are. Breaking
+> it to learn is in scope; hardening it for the world is not. See §9.
 
 ## 2. Why This Project
 
@@ -59,6 +68,8 @@ Each milestone = one working, demoable state + one blog post. Live status is tra
 | 12 | **File manager** | Shell commands to list, navigate, read, and (optionally) write files — the stated end goal | "The whole point, arrived at" |
 | 13 (stretch) | Userspace / syscalls | Basic ring 3 separation, a minimal syscall interface | stretch post |
 | 14 (stretch) | Networking stub | Loopback or a trivial virtio-net driver, "hello" over a socket | stretch post |
+| 15 (security) | Break the privilege boundary | From ring 3, deliberately attempt to read kernel memory / execute privileged instructions / pass bad syscall args — and watch the CPU + kernel stop you (or find where they don't) | "Trying to break out of my own jail" |
+| 16 (security) | Break the filesystem boundary | Craft inputs that make the FS read/write outside a file's bounds; fuzz the parser; try to reach data a caller shouldn't | "Attacking the lies about disk layout" |
 | — | Browser demo | v86 embed on the blog, loading the actual kernel image | "You can boot it right here" |
 
 **Realistic pacing (hobbyist, part-time):** Milestones 0–3 are a focused weekend-to-two-weeks. Milestones 4–9 are the long middle — months of intermittent work, with stretches of no visible progress while a single bug is chased. Milestones 10–12 move faster once memory and interrupts are solid.
@@ -76,7 +87,42 @@ Each milestone = one working, demoable state + one blog post. Live status is tra
 - Whether FAT16 read support or a custom minimal filesystem is the better learning trade for milestone 11.
 - Gotchas specific to running v86 against a real multiboot image (vs. its usual Linux/DOS demo images).
 
-## 8. Blog / Narrative Notes
+## 8. Security & Adversarial Self-Testing (learning track)
+
+A parallel track, not a phase — it only becomes possible *after* there's
+something to attack, and it's about understanding, not defense.
+
+**When it starts.** There's no meaningful attack surface until the kernel has a
+**privilege boundary** (ring-3 userspace + a syscall interface, milestone 13) or
+**persistent data** (a filesystem, milestones 11–12). Before that, everything
+runs in ring 0 with full power — there's nothing to "break out of." So the
+security milestones (15–16) sit after those.
+
+**What it looks like.** All of this is running the author's own code on the
+author's own hardware/VM — authorized testing of a system you fully own:
+
+- **Privilege escape attempts.** From a ring-3 process, try the things that
+  *should* fault: execute a privileged instruction (`cli`, `hlt`, writing a
+  control register), read a kernel-only page, jump into kernel code directly.
+  Each one is a lesson in exactly what the ring boundary and page permissions
+  enforce — and a chance to find a gap where they don't.
+- **Syscall boundary abuse.** Pass out-of-range pointers, unmapped addresses,
+  huge lengths, and malformed arguments across the syscall interface. The kernel
+  must validate everything crossing the boundary; fuzzing it finds the checks you
+  forgot. (This is the classic "confused deputy" surface.)
+- **Filesystem/parser fuzzing.** Feed the FS deliberately corrupt structures and
+  boundary-case inputs; try to read or write outside a file's extent.
+
+**The mindset (see the `red-team` skill).** Think in terms of the boundary being
+tested, the specific invariant an attack would violate, and what observable proof
+(a fault caught, or data leaked) settles whether the boundary holds. Every
+finding — including "the boundary held, here's why" — is blog material and a real
+lesson in what these mechanisms actually do.
+
+**Still not a goal:** making the OS *withstand* a determined attacker. We break
+it to learn where the edges are, then write down what we found.
+
+## 9. Blog / Narrative Notes
 
 - Employer-agnostic, people-agnostic — same rule as other blog content.
 - Each milestone post includes: what broke, how long it took to find, and the actual fix — the debugging story is the more honest and more interesting post, not just "it works now."
