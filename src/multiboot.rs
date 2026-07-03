@@ -80,7 +80,7 @@ impl BootInfo {
     /// frame allocator reserves this range so it never hands out the frames the
     /// boot information itself occupies.
     pub fn region(&self) -> (u64, u64) {
-        (self.addr, self.addr + self.total_size as u64)
+        (self.addr, self.addr.saturating_add(self.total_size as u64))
     }
 
     /// Iterate the physical memory regions, or `None` if GRUB provided no memory
@@ -98,6 +98,13 @@ impl BootInfo {
             let header: TagHeader =
                 unsafe { core::ptr::read_unaligned(tag_ptr as *const TagHeader) };
 
+            // A valid tag is at least its own 8-byte header. A smaller size is
+            // malformed and, worse, would make the `(size + 7) & !7` advance
+            // below round to 0 and spin this loop forever — stop the walk.
+            if (header.size as usize) < core::mem::size_of::<TagHeader>() {
+                return None;
+            }
+
             if header.typ == TAG_TYPE_END {
                 return None;
             }
@@ -111,9 +118,18 @@ impl BootInfo {
                 // tag_ptr + 8, inside this tag.
                 let entry_size =
                     unsafe { core::ptr::read_unaligned((tag_ptr + 8) as *const u32) } as u64;
+                // An entry can't be smaller than one entry record; a zero (or
+                // too-small) stride would make the iterator loop without ever
+                // advancing and over-read each entry. Reject rather than hang.
+                if entry_size < core::mem::size_of::<RawMemoryEntry>() as u64 {
+                    return None;
+                }
                 return Some(MemoryMapIter {
                     next: tag_ptr + 16,
-                    end: tag_ptr + header.size as u64,
+                    // Clamp the tag's self-reported end to the structure's own
+                    // bound: a corrupt oversized `size` must not let the iterator
+                    // march past mapped memory (below the IDT exists) into a fault.
+                    end: (tag_ptr + header.size as u64).min(end),
                     entry_size,
                 });
             }
@@ -168,9 +184,11 @@ pub struct MemoryRegion {
 }
 
 impl MemoryRegion {
-    /// One past the last byte of the region.
+    /// One past the last byte of the region. Saturating, so a garbage `length`
+    /// from a malformed map clamps to `u64::MAX` instead of wrapping to a small
+    /// value that would look like a tiny (or inverted) region.
     pub fn end(&self) -> u64 {
-        self.base + self.length
+        self.base.saturating_add(self.length)
     }
 
     /// Whether this region is usable RAM (`kind == 1`) rather than reserved.

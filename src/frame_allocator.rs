@@ -43,9 +43,6 @@ pub struct PhysFrame(u64);
 
 impl PhysFrame {
     /// The frame that contains `addr`, rounding down to the 4 KiB boundary.
-    // Part of the intended `PhysFrame` API; the page-table code in M7 is the
-    // first caller. Kept now so the type is complete where it is defined.
-    #[allow(dead_code)]
     pub fn containing_address(addr: u64) -> PhysFrame {
         PhysFrame(addr & !(FRAME_SIZE - 1))
     }
@@ -140,6 +137,9 @@ pub unsafe fn init(multiboot_info_addr: u64, kernel_start: u64, kernel_end: u64)
 
     // Phase 1: mark the entire address space used. Anything GRUB does not
     // explicitly call usable stays used, so a gap in the map is never handed out.
+    // Reset the free count alongside the fill so `init` is self-consistent even
+    // if it were ever called twice (the contract is once, but don't rely on it).
+    allocator.free_frames = 0;
     for word in allocator.bitmap.iter_mut() {
         *word = u64::MAX;
     }
@@ -177,6 +177,14 @@ pub unsafe fn init(multiboot_info_addr: u64, kernel_start: u64, kernel_end: u64)
     }
 
     let usable_frames = allocator.free_frames;
+
+    // A map that parses but reports no usable RAM is as fatal to everything above
+    // us (page tables, heap) as a missing map — and far more confusing if it
+    // slips through as "0 frames free". Refuse to come up, same as the no-tag case.
+    assert!(
+        usable_frames > 0,
+        "Multiboot2 memory map reported zero usable frames — cannot manage physical memory"
+    );
 
     // Phase 3: re-reserve the frames we must never give away, even though they
     // sit inside usable RAM:
@@ -257,12 +265,31 @@ pub fn free(frame: PhysFrame) {
     allocator.free_frames += 1;
 }
 
+/// The number of physical frames currently free. Handy for diagnostics and for
+/// later milestones (page tables, heap) to sanity-check how much they consume.
+pub fn free_frame_count() -> u64 {
+    FRAME_ALLOCATOR.lock().free_frames
+}
+
 /// A self-test proving the allocator's core invariants, printed over serial so a
-/// boot run demonstrates the milestone. It allocates a handful of frames, checks
-/// they are distinct and frame-aligned, then proves *reclaim* works — the one
-/// behaviour that separates a real bitmap from a bump allocator: free a frame and
-/// the very next `alloc` hands it straight back.
+/// boot run demonstrates the milestone. It checks that allocations are distinct
+/// and frame-aligned, that *reclaim* works — the behaviour that separates a real
+/// bitmap from a bump allocator — and that the two failure paths (double free and
+/// out-of-range free) are rejected without corrupting the free count.
+///
+/// The `.expect()`s below are the one place we deliberately unwrap `alloc`,
+/// against the module's own "never unwrap blindly" rule: this runs once at boot
+/// with ~120 MiB free, so three allocations cannot fail, and a clear panic beats
+/// limping onward if that assumption is ever wrong.
+///
+/// Note: full exhaustion-to-`None` is not driven here. Doing it honestly needs
+/// either draining the live singleton (leaving nothing for later boot code) or a
+/// second 128 KiB allocator, which will not fit on the 16 KiB boot stack. The
+/// `None` path is still covered structurally — `alloc` returns `None` once every
+/// bitmap word reads `u64::MAX`.
 pub fn self_test() {
+    let start_free = free_frame_count();
+
     // Grab a few frames and sanity-check them.
     let a = alloc().expect("frame allocator empty at self-test");
     let b = alloc().expect("frame allocator empty at self-test");
@@ -281,7 +308,8 @@ pub fn self_test() {
         c.start_address()
     );
 
-    // Reclaim test: free b, then the next alloc must return b.
+    // Reclaim test: free b, then the next alloc must return b (the lowest free
+    // frame). This is the proof it is a real bitmap and not a bump allocator.
     free(b);
     let reclaimed = alloc().expect("frame allocator empty after free");
     assert!(
@@ -293,8 +321,35 @@ pub fn self_test() {
         reclaimed.start_address()
     );
 
-    // Put the frames we borrowed for the test back.
+    // Failure paths. The next two operations are *expected* to be rejected, so
+    // the `[warn]` lines they print are the guards working, not a problem.
+    crate::serial_println!("[test] the next two [warn]s are expected (double free, out-of-range):");
+
+    // Double free must be detected and must NOT change the free count — clearing
+    // an already-clear bit would eventually hand the same frame out twice.
+    free(c);
+    let after_single_free = free_frame_count();
+    free(c);
+    assert!(
+        free_frame_count() == after_single_free,
+        "double free must not change the free count"
+    );
+
+    // A free of an address past the bitmap's coverage must be a no-op, not an
+    // out-of-bounds write. (Also the first real use of `containing_address`.)
+    free(PhysFrame::containing_address(MAX_ADDRESS));
+    assert!(
+        free_frame_count() == after_single_free,
+        "out-of-range free must not change the free count"
+    );
+    crate::serial_println!("[ok] rejects double free and out-of-range free");
+
+    // Restore the pool: `a` and `reclaimed` (== b) are still out; `c` is already
+    // freed. Return the two, and the count must match where we started.
     free(a);
     free(reclaimed);
-    free(c);
+    assert!(
+        free_frame_count() == start_free,
+        "self-test must leave the frame pool exactly as it found it"
+    );
 }
