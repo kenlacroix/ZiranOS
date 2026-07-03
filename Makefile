@@ -72,9 +72,11 @@ ifeq ($(QEMU_FIRMWARE),uefi)
     QEMU_FW_DEPS  := $(UEFI_VARS)
 endif
 
-# The line the kernel prints over serial once it reaches long mode. The headless
-# boot test passes iff this appears in the captured serial output.
-BOOT_MARKER := Ziran OS booted
+# Serial markers the headless boot test asserts on. BOOT_MARKER proves the kernel
+# reached long mode (Milestone 2); MILESTONE_MARKER proves the current milestone's
+# subsystem came up. Both must appear in the captured serial output for a pass.
+BOOT_MARKER      := Ziran OS booted
+MILESTONE_MARKER := M6: frame allocator online
 
 CARGO_FLAGS := --release
 ifeq ($(PROFILE),debug)
@@ -142,11 +144,13 @@ run-headless: $(ISO) $(QEMU_FW_DEPS)
 	@mkdir -p build
 	@$(TIMEOUT) 20 $(QEMU) $(QEMU_FW_FLAGS) -cdrom $(ISO) $(QEMU_FLAGS) -serial file:build/serial.log || true
 	@echo "----- captured serial -----"; cat build/serial.log 2>/dev/null; echo "---------------------------"
-	@if grep -q "$(BOOT_MARKER)" build/serial.log 2>/dev/null; then \
-		echo "[boot test] PASS -- kernel reached long mode"; \
-	else \
+	@if ! grep -q "$(BOOT_MARKER)" build/serial.log 2>/dev/null; then \
 		echo "[boot test] FAIL -- '$(BOOT_MARKER)' never appeared on serial"; exit 1; \
 	fi
+	@if ! grep -q "$(MILESTONE_MARKER)" build/serial.log 2>/dev/null; then \
+		echo "[boot test] FAIL -- '$(MILESTONE_MARKER)' never appeared on serial"; exit 1; \
+	fi
+	@echo "[boot test] PASS -- reached long mode and '$(MILESTONE_MARKER)'"
 
 # Freeze at the first instruction and open a GDB stub on tcp::1234.
 debug: $(ISO) $(QEMU_FW_DEPS)

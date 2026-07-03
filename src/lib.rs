@@ -21,12 +21,22 @@
 
 use core::panic::PanicInfo;
 
+mod frame_allocator;
 mod interrupts;
 mod keyboard;
+mod multiboot;
 mod pic;
 mod port;
 mod serial;
 mod vga_buffer;
+
+// Bounds of the loaded kernel image, defined by `linker.ld`. These are *symbols*,
+// so their addresses — not their (meaningless) byte values — are what we want;
+// see the frame allocator, which carves this range out of usable RAM.
+extern "C" {
+    static kernel_start: u8;
+    static kernel_end: u8;
+}
 
 /// The kernel entry point, called by `long_mode_init.asm` once the CPU is in
 /// 64-bit long mode with a valid stack.
@@ -62,6 +72,37 @@ pub extern "C" fn kernel_main(multiboot_info_addr: u64) -> ! {
         "[ok] Multiboot2 info structure received at {:#018x}",
         multiboot_info_addr
     );
+
+    // Milestone 6: physical memory management. First show the raw memory map GRUB
+    // handed us — the ground truth the allocator is built on.
+    // SAFETY: `multiboot_info_addr` is GRUB's Multiboot2 pointer, in identity-
+    // mapped low memory (see kernel_main's doc comment).
+    let boot_info = unsafe { multiboot::BootInfo::new(multiboot_info_addr) };
+    match boot_info.memory_map() {
+        Some(map) => {
+            for region in map {
+                serial_println!(
+                    "  region base={:#014x} len={:#014x} kind={} {}",
+                    region.base,
+                    region.length,
+                    region.kind,
+                    if region.is_usable() { "USABLE" } else { "reserved" }
+                );
+            }
+        }
+        None => serial_println!("  (no memory-map tag present)"),
+    }
+
+    // Stand up the frame allocator over that map, carving out frame 0, the kernel
+    // image, and the Multiboot2 structure. Then prove alloc/free/reclaim work.
+    // SAFETY: `kernel_start`/`kernel_end` are linker symbols — we take their
+    // addresses, never read them; `multiboot_info_addr` is the valid boot pointer.
+    let kernel_start_addr = unsafe { &kernel_start as *const u8 as u64 };
+    let kernel_end_addr = unsafe { &kernel_end as *const u8 as u64 };
+    unsafe {
+        frame_allocator::init(multiboot_info_addr, kernel_start_addr, kernel_end_addr);
+    }
+    frame_allocator::self_test();
 
     // Milestone 4: install the interrupt handlers, then prove they work by
     // deliberately triggering a breakpoint. A working IDT catches the `int3`,
