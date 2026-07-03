@@ -119,6 +119,17 @@
   .btn.primary:hover{background:var(--accent-2)}
   .machine-note{font-size:12.5px;color:var(--ink-soft);margin:12px 4px 0;line-height:1.5}
   .machine-note code{font-family:var(--font-mono);color:var(--accent)}
+  /* The technical mode-explanation, tucked behind a disclosure so the page reads
+     simply by default but the detail is one click away. */
+  details.mode-why{margin:6px 4px 0}
+  details.mode-why>summary{cursor:pointer;list-style:none;display:inline-flex;align-items:center;gap:6px;
+    font-family:var(--font-mono);font-size:11px;color:#9fbcae;opacity:.8}
+  details.mode-why>summary:hover{opacity:1;color:var(--accent)}
+  details.mode-why>summary::-webkit-details-marker{display:none}
+  details.mode-why>summary::before{content:"ⓘ";font-style:normal}
+  details.mode-why[open]>summary::before{content:"▾"}
+  .mode-why-body{font-size:12px;color:var(--ink-soft);margin:8px 2px 0;line-height:1.55}
+  .mode-why-body code{font-family:var(--font-mono);color:var(--accent)}
 
   /* ---- guided tour ---- */
   .tour h2{font-size:13px;font-family:var(--font-mono);text-transform:uppercase;letter-spacing:.12em;
@@ -249,7 +260,11 @@
           <span class="badge" id="hint" style="align-self:center">click the screen, then type</span>
         </div>
       </div>
-      <p class="machine-note" id="mnote">Live mode loads the actual kernel image (<code>kernel.bin</code>) into the v86 emulator. If the emulator can’t be reached, this falls back to a faithful replay of the same boot so the lesson still works.</p>
+      <p class="machine-note" id="mnote">A faithful reconstruction of the real kernel’s boot output.</p>
+      <details class="mode-why">
+        <summary>How this works — the technical bit</summary>
+        <div class="mode-why-body" id="mnote-detail">Loading…</div>
+      </details>
     </div>
 
     <!-- GUIDED TOUR -->
@@ -515,7 +530,8 @@ make debug      # boot frozen, attach GDB</code>
     var why = (reason==="notready")
       ? "This is a <b>faithful reconstruction</b> of the exact serial/VGA output the real kernel produces — not the live emulator. A Multiboot1 trampoline (in the boot code) does get v86 to load and run our boot code, but v86 is a 32-bit emulator with no long mode, so the 64-bit kernel can’t start. The only browser emulator that could is Bochs-on-WASM, which is too heavy to be worth it — so the live kernel runs under QEMU instead (see the repo’s run instructions). "
       : "The live emulator couldn’t be reached (offline, blocked, or missing v86 files), so this is a <b>faithful reconstruction</b> of the same boot. ";
-    $("mnote").innerHTML = why + "Every line below is what the kernel actually prints; typing echoes locally, the way the real keyboard driver echoes it.";
+    $("mnote").innerHTML = "A faithful reconstruction of the real kernel’s boot output — every line below is exactly what the kernel prints; typing echoes locally.";
+    $("mnote-detail").innerHTML = why;
     stopSim();
     screenEl.innerHTML=""; setLED(ledRun,false); setLED(ledIrq,false);
     var li=0, typed=[];
@@ -583,7 +599,8 @@ make debug      # boot frozen, attach GDB</code>
             if(!decided && line.indexOf("Ziran OS booted")>=0){
               decided=true; clearTimeout(to);
               badge.textContent="live · real kernel"; setLED(ledRun,true);
-              $("mnote").innerHTML="Live mode: the text above was printed by the actual <code>kernel.bin</code> running in the v86 emulator — not replayed. Keystrokes go to the real keyboard driver.";
+              $("mnote").innerHTML="Live: the real kernel is running in the emulator.";
+              $("mnote-detail").innerHTML="The text above was printed by the actual <code>kernel-v86.bin</code> running in the v86 emulator — not replayed. Keystrokes go to the real keyboard driver.";
             }
             line="";
           } else { line += ch; }
