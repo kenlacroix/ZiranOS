@@ -29,6 +29,12 @@
 //!
 //! House style note: no `x86_64` crate — the entry format and the walk are
 //! hand-rolled with raw `u64` bit operations, like the rest of the kernel.
+//!
+//! Re-entrancy: this module keeps no global mutable state of its own — the active
+//! address space lives in CR3 and in page-table frames, and the frame allocator
+//! guards its own state. `init`/`self_test` run before `sti`, and nothing here is
+//! called from an interrupt handler, so no lock is needed yet (a revisit for M9,
+//! like the allocator).
 
 use crate::frame_allocator;
 
@@ -57,11 +63,14 @@ const HUGE: u64 = 1 << 7;
 const IDENTITY_LIMIT: u64 = 1 << 30;
 
 /// Turn a physical address into a virtual one the kernel can dereference. Under
-/// the identity map this is the identity function; the assert makes the
-/// assumption *loud* if a frame ever falls outside the mapped window, rather than
-/// letting it trip a silent fault later.
+/// the identity map this is the identity function; the assert keeps the promise
+/// *loud even in release builds* — if a frame ever falls outside the mapped
+/// window it panics here instead of silently forming a wild pointer that corrupts
+/// memory and faults far away. All usable RAM is < 126 MiB, so this never fires
+/// today; it guards a future >1 GiB machine or a stray frame. (A plain
+/// `debug_assert!` would be compiled out of our `--release` image — no net.)
 fn phys_to_virt(phys: u64) -> u64 {
-    debug_assert!(
+    assert!(
         phys < IDENTITY_LIMIT,
         "paging: physical address outside the identity map"
     );
@@ -92,10 +101,10 @@ fn read_cr3() -> u64 {
 /// read from a valid table.
 unsafe fn read_entry(table_phys: u64, index: usize) -> u64 {
     let table = phys_to_virt(table_phys) as *const u64;
-    // A page table is ordinary RAM (not MMIO); a plain read is correct. The CPU
-    // also reads these; we keep the TLB in sync explicitly (invlpg / CR3 reload)
-    // wherever we *write* them.
-    unsafe { *table.add(index) }
+    // Volatile: the hardware page-walker also reads these, so the compiler must
+    // not cache, reorder, or elide the access. (TLB coherence is handled
+    // separately — invlpg / CR3 reload — wherever we write an entry.)
+    unsafe { core::ptr::read_volatile(table.add(index)) }
 }
 
 /// Translate a virtual address to its physical address by walking the page tables
@@ -123,12 +132,15 @@ fn translate_from(pml4_phys: u64, virt: u64) -> Option<u64> {
         if entry & PRESENT == 0 {
             return None;
         }
-        if entry & HUGE != 0 {
-            // A large page ends the walk here. Level 1 = 2 MiB (21-bit offset),
-            // level 2 = 1 GiB (30-bit offset).
+        // A large page (PS bit) ends the walk — but only at the PD (2 MiB) and
+        // PDPT (1 GiB) levels. Bit 7 is reserved/ignored at the PML4 level, so we
+        // must not misread a stray one there as a bogus 512 GiB page.
+        if level <= 2 && entry & HUGE != 0 {
             let offset_bits = 12 + 9 * level; // 21 at PD, 30 at PDPT
-            let page = entry & ADDR_MASK;
             let offset_mask = (1u64 << offset_bits) - 1;
+            // Mask the page's low bits (PAT / reserved) out of the base before
+            // adding the in-page offset, so a set low bit can't double-count.
+            let page = (entry & ADDR_MASK) & !offset_mask;
             return Some(page + (virt & offset_mask));
         }
         table_phys = entry & ADDR_MASK; // descend to the next-level table
@@ -149,7 +161,9 @@ fn translate_from(pml4_phys: u64, virt: u64) -> Option<u64> {
 /// CR3 load flushes it; changed live mappings need `invlpg`).
 unsafe fn write_entry(table_phys: u64, index: usize, entry: u64) {
     let table = phys_to_virt(table_phys) as *mut u64;
-    unsafe { *table.add(index) = entry };
+    // Volatile: the page-walker reads these structures, so the store must be
+    // materialized, not held in a register or reordered by the compiler.
+    unsafe { core::ptr::write_volatile(table.add(index), entry) };
 }
 
 /// Zero a freshly allocated 4 KiB frame (512 × `u64`). The frame allocator does
@@ -164,13 +178,12 @@ fn zero_frame(frame_phys: u64) {
     }
 }
 
-/// Allocate one physical frame for a page table and zero it. Panics on
-/// exhaustion — we cannot build an address space without frames.
-fn alloc_table() -> u64 {
-    let frame = frame_allocator::alloc().expect("paging: out of frames building page tables");
-    let phys = frame.start_address();
+/// Allocate one physical frame for a page table and zero it, or `None` if no
+/// frame is free. (The frame allocator does not zero.)
+fn alloc_table() -> Option<u64> {
+    let phys = frame_allocator::alloc()?.start_address();
     zero_frame(phys);
-    phys
+    Some(phys)
 }
 
 /// Build a fresh page-table hierarchy that identity-maps `[0, IDENTITY_LIMIT)`
@@ -178,9 +191,11 @@ fn alloc_table() -> u64 {
 /// This reproduces the map the bootloader gave us, but in tables *we* allocated
 /// and own. One PML4 + one PDPT + one PD frame — the huge pages keep it tiny.
 fn build_address_space() -> u64 {
-    let pml4 = alloc_table();
-    let pdpt = alloc_table();
-    let pd = alloc_table();
+    // The initial address space *must* be built; a shortage of frames this early
+    // is unrecoverable, so panic (unlike the runtime map_page path below).
+    let pml4 = alloc_table().expect("paging: out of frames building the initial page tables");
+    let pdpt = alloc_table().expect("paging: out of frames building the initial page tables");
+    let pd = alloc_table().expect("paging: out of frames building the initial page tables");
 
     // Fill the PD: entry i maps the 2 MiB page at physical i * 2 MiB. 512 entries
     // × 2 MiB = 1 GiB, virtual == physical.
@@ -250,12 +265,24 @@ fn flush_tlb(virt: u64) {
     }
 }
 
+/// Why a [`map_page`] call can fail. A runtime mapping is a fallible operation —
+/// the M8 heap will map pages as it grows and must handle a shortage — so the
+/// error is returned rather than panicked (unlike the one-time `init` build).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MapError {
+    /// No physical frame was free for a needed intermediate page table.
+    OutOfFrames,
+    /// The virtual address already lies inside a huge page; we do not split them.
+    HugePage,
+}
+
 /// Map the 4 KiB page at virtual address `virt` to physical address `phys`, with
 /// `flags` (PRESENT is added automatically). Allocates and links any missing
 /// intermediate tables from the frame allocator. `virt`/`phys` are rounded down
-/// to their 4 KiB page. Only maps into virtual space not already covered by a
-/// huge page (it is meant for fresh addresses above the identity window).
-pub fn map_page(virt: u64, phys: u64, flags: u64) {
+/// to their 4 KiB page. Fails with [`MapError::HugePage`] if the address is
+/// already inside a huge page (we don't split), or [`MapError::OutOfFrames`] if a
+/// table frame can't be allocated.
+pub fn map_page(virt: u64, phys: u64, flags: u64) -> Result<(), MapError> {
     let virt = virt & !(FRAME_SIZE - 1);
     let phys = phys & !(FRAME_SIZE - 1);
     let mut table_phys = read_cr3() & ADDR_MASK;
@@ -267,13 +294,14 @@ pub fn map_page(virt: u64, phys: u64, flags: u64) {
         // just read or just allocated — all in the identity map.
         let entry = unsafe { read_entry(table_phys, index) };
         if entry & PRESENT != 0 {
-            assert!(
-                entry & HUGE == 0,
-                "map_page: virtual address is inside an existing huge page"
-            );
+            // A huge page at PD (2 MiB) or PDPT (1 GiB) has no lower table to
+            // descend into; bit 7 is meaningless at PML4, so only check level <= 2.
+            if level <= 2 && entry & HUGE != 0 {
+                return Err(MapError::HugePage);
+            }
             table_phys = entry & ADDR_MASK;
         } else {
-            let next = alloc_table();
+            let next = alloc_table().ok_or(MapError::OutOfFrames)?;
             // SAFETY: `table_phys` is a valid, identity-mapped table frame.
             unsafe { write_entry(table_phys, index, next | PRESENT | WRITABLE) };
             table_phys = next;
@@ -284,6 +312,7 @@ pub fn map_page(virt: u64, phys: u64, flags: u64) {
     // SAFETY: `table_phys` is the identity-mapped PT frame for this address.
     unsafe { write_entry(table_phys, table_index(virt, 0), phys | flags | PRESENT) };
     flush_tlb(virt);
+    Ok(())
 }
 
 /// Unmap the 4 KiB page at `virt` by clearing its PT entry; returns `false` if it
@@ -322,12 +351,14 @@ pub fn self_test() {
     const TEST_VIRT: u64 = 0x4000_0000; // exactly 1 GiB — first address past the map
     const SENTINEL: u32 = 0xDEAD_BEEF;
 
+    let free_before = frame_allocator::free_frame_count();
+
     // It must start unmapped (the software walk agrees with the hardware).
     assert_eq!(translate(TEST_VIRT), None, "paging self-test: address should start unmapped");
 
     let frame = frame_allocator::alloc().expect("paging self-test: no free frame");
     let phys = frame.start_address();
-    map_page(TEST_VIRT, phys, WRITABLE);
+    map_page(TEST_VIRT, phys, WRITABLE).expect("paging self-test: map_page failed");
 
     // Write through the new virtual address; read back through the frame's own
     // identity address. Equal => TEST_VIRT and `phys` alias the same physical RAM.
@@ -350,4 +381,16 @@ pub fn self_test() {
     crate::serial_println!("[ok] paging: unmapped {:#014x}", TEST_VIRT);
 
     frame_allocator::free(frame);
+
+    // map_page allocated two intermediate tables (a PD for the empty PDPT[1], and
+    // its PT); unmap_page clears only the leaf, so those two frames are a
+    // deliberate, bounded leak. Assert exactly that, so it stays visible and
+    // intentional rather than silent accounting drift — reclaiming empty tables is
+    // a later refinement.
+    assert_eq!(
+        frame_allocator::free_frame_count(),
+        free_before - 2,
+        "paging self-test should leak exactly the two intermediate tables"
+    );
+    crate::serial_println!("[ok] paging: self-test left 2 intermediate tables mapped (expected)");
 }
