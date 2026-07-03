@@ -5,6 +5,13 @@
 # Our own build artifacts (objects, linked kernel, ISO, isofiles staging)
 /build
 
+# Kernel image staged into the web tutorial (produced by `make web`)
+/web/kernel.bin
+# Optional self-hosted v86 assets (see web/README.md)
+/web/libv86.js
+/web/v86.wasm
+/web/*.bin
+
 # Editor / OS noise
 .DS_Store
 *.swp

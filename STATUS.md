@@ -24,7 +24,7 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started
 | 14 | Networking stub (stretch) | ⬜ | |
 | 15 | Break the privilege boundary (security) | ⬜ | Adversarial self-testing; needs M13. See `/red-team` + PLAN.md §8. |
 | 16 | Break the filesystem boundary (security) | ⬜ | Needs M11–12. |
-| — | v86 browser demo | ⬜ | Same multiboot image, embedded on the blog. |
+| — | Teaching tool (`web/`) | 🚧 | Dual-mode v86 embed + predict→observe→explain tour, covering M0–5. Grows one step per milestone. See `web/README.md`. |
 
 ## Verification state
 

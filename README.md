@@ -29,7 +29,10 @@ CI boots the image under headless QEMU on every push.
 
 New here? Start with the plain-language explainers in
 [`docs/concepts/`](docs/concepts/) — e.g. [interrupts](docs/concepts/interrupts.md),
-written from first principles alongside the code.
+written from first principles alongside the code. Or boot it in your browser and
+learn as it runs: the **[`web/`](web/) teaching tool** loads the real kernel in a
+PC emulator beside a guided predict → observe → explain tour (`make web`, then
+serve `web/`).
 
 | Range | State |
 |------|-------|
@@ -76,6 +79,7 @@ grub/grub.cfg           one-entry GRUB menu for the bootable ISO
 Makefile                the whole build/run/debug pipeline, spelled out
 .github/workflows/ci.yml build + headless boot smoke test on every push
 CLAUDE.md               the per-milestone workflow (adapted from gstack)
+web/                    the browser teaching tool (boots the real kernel + guided tour)
 docs/concepts/          plain-language explainers, written to teach
 docs/blog/              the narrative, one post per milestone
 docs/MILESTONE_CHECKLIST.md  the loop every milestone runs

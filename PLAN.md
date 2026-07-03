@@ -10,6 +10,9 @@ A hobbyist, from-scratch operating system built to understand what's actually ha
 - Depth of understanding gained
 - A working, bootable system reaching at least a simple file manager
 - A public trail of blog posts documenting the process, including the parts that didn't work
+- **A teaching tool** — the OS boots in the browser next to a guided, interactive
+  tutorial, so anyone (starting with the author) can *learn each layer while it
+  runs*, not just read about it (see §3)
 - A body of work that sits credibly next to app-level projects (MoodHaven, StillHaven, Steward) as evidence of range — from PWA down to bare metal
 
 **Explicit non-goals:** POSIX compliance, real hardware support beyond QEMU/common virtualization, networking stack (beyond a stretch-goal stub), *production* security hardening, multi-user support, or anyone besides the author actually using it.
@@ -38,6 +41,27 @@ The throughline across current work is sovereignty and reduced surface area for 
 | Public-facing / blog embed | **v86** (JS/WASM x86 emulator — see copy.sh/v86) | Boots the *same* image, no porting required, runs client-side in any browser tab |
 
 The browser path is not a separate build target — it's the same multiboot-compatible kernel image, loaded into a different emulator. This means blog posts can eventually embed a literal "click to boot" demo. That's a strong differentiator for a hobbyist OS blog — most never get an interactive artifact, they get screenshots.
+
+### 3a. The browser demo is really a *teaching tool* (elevated)
+
+The most honest reconciliation of "I don't want AI to just build this and hand me
+a finished thing" is to make the public artifact itself a **learning
+instrument**. So the v86 embed is promoted from a novelty to a first-class track
+(`web/index.html`): the real kernel boots beside a guided tour that works on a
+**predict → observe → explain** loop — the reader guesses what a boot line means,
+watches it happen in the live machine, then gets the explanation with links to
+the *actual source file* and the from-first-principles concept docs
+(`docs/concepts/`).
+
+Design principles for the teaching tool:
+- **The real machine is the hero.** It boots the actual image, not a video.
+- **Predict before reveal.** Every concept starts as a question, so the learner
+  does the thinking first — the whole point.
+- **Every claim links to real code.** Nothing is asserted that you can't go read.
+- **It grows with the OS.** Each milestone adds its output line and a tour step —
+  this is part of the milestone checklist (`docs/MILESTONE_CHECKLIST.md`).
+- **Dual-mode so it never breaks.** Live v86 when the assets are reachable; a
+  faithful simulated replay of the same boot otherwise.
 
 ## 4. Core Technical Decisions
 
@@ -70,7 +94,7 @@ Each milestone = one working, demoable state + one blog post. Live status is tra
 | 14 (stretch) | Networking stub | Loopback or a trivial virtio-net driver, "hello" over a socket | stretch post |
 | 15 (security) | Break the privilege boundary | From ring 3, deliberately attempt to read kernel memory / execute privileged instructions / pass bad syscall args — and watch the CPU + kernel stop you (or find where they don't) | "Trying to break out of my own jail" |
 | 16 (security) | Break the filesystem boundary | Craft inputs that make the FS read/write outside a file's bounds; fuzz the parser; try to reach data a caller shouldn't | "Attacking the lies about disk layout" |
-| — | Browser demo | v86 embed on the blog, loading the actual kernel image | "You can boot it right here" |
+| — | Teaching tool (`web/`) | v86 embed + guided predict→observe→explain tour; grows one step per milestone | "You can boot it right here — and learn how it works" |
 
 **Realistic pacing (hobbyist, part-time):** Milestones 0–3 are a focused weekend-to-two-weeks. Milestones 4–9 are the long middle — months of intermittent work, with stretches of no visible progress while a single bug is chased. Milestones 10–12 move faster once memory and interrupts are solid.
 

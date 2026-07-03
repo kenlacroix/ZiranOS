@@ -1,0 +1,596 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ziran OS — Learn as it boots</title>
+</head>
+<body>
+<style>
+  :root {
+    --paper:#e9ece9; --surface:#f6f7f5; --surface-2:#eef1ee;
+    --ink:#0f1618; --ink-soft:#53605e; --line:#d3d9d5;
+    --accent:#9a5a0e; --accent-2:#b9791f; --accent-ghost:#9a5a0e1a;
+    --machine:#050f0b; --machine-edge:#0c1b14; --screen:#02070a;
+    --phosphor:#57e08a; --phosphor-dim:#2f7a52; --led-on:#7ff0a6; --led-warn:#f0b24a;
+    --shadow:0 1px 2px #0f16180f, 0 8px 30px #0f161814;
+    --font-sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --font-mono:ui-monospace,"SF Mono","Cascadia Code","JetBrains Mono",Menlo,Consolas,monospace;
+    --maxw:1180px;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --paper:#0b1012; --surface:#111a1c; --surface-2:#0e1618;
+      --ink:#e7ece9; --ink-soft:#93a09c; --line:#212c2e;
+      --accent:#e6a24c; --accent-2:#f2b866; --accent-ghost:#e6a24c1f;
+      --machine:#040d09; --machine-edge:#0a1610; --screen:#01060a;
+      --shadow:0 1px 2px #0000004d, 0 10px 34px #00000059;
+    }
+  }
+  :root[data-theme="light"]{
+    --paper:#e9ece9; --surface:#f6f7f5; --surface-2:#eef1ee;
+    --ink:#0f1618; --ink-soft:#53605e; --line:#d3d9d5;
+    --accent:#9a5a0e; --accent-2:#b9791f; --accent-ghost:#9a5a0e1a;
+    --machine:#050f0b; --machine-edge:#0c1b14; --screen:#02070a;
+    --shadow:0 1px 2px #0f16180f, 0 8px 30px #0f161814;
+  }
+  :root[data-theme="dark"]{
+    --paper:#0b1012; --surface:#111a1c; --surface-2:#0e1618;
+    --ink:#e7ece9; --ink-soft:#93a09c; --line:#212c2e;
+    --accent:#e6a24c; --accent-2:#f2b866; --accent-ghost:#e6a24c1f;
+    --machine:#040d09; --machine-edge:#0a1610; --screen:#01060a;
+    --shadow:0 1px 2px #0000004d, 0 10px 34px #00000059;
+  }
+
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--font-sans);
+    line-height:1.6;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+  .wrap{max-width:var(--maxw);margin:0 auto;padding:0 clamp(16px,4vw,40px)}
+  a{color:var(--accent);text-underline-offset:2px}
+  a:focus-visible,button:focus-visible,[tabindex]:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+  .mono{font-family:var(--font-mono)}
+  .eyebrow{font-family:var(--font-mono);font-size:12px;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--accent);font-weight:600}
+
+  /* ---- masthead ---- */
+  header.top{border-bottom:1px solid var(--line);background:linear-gradient(var(--surface),var(--paper))}
+  .topbar{display:flex;align-items:center;justify-content:space-between;padding:14px 0;gap:16px}
+  .brand{display:flex;align-items:baseline;gap:12px}
+  .brand .kanji{font-size:22px;color:var(--accent);font-weight:700}
+  .brand .name{font-family:var(--font-mono);font-weight:600;letter-spacing:.02em}
+  .brand .rev{font-family:var(--font-mono);font-size:12px;color:var(--ink-soft);
+    border:1px solid var(--line);border-radius:999px;padding:2px 9px}
+  .themebtn{font-family:var(--font-mono);font-size:12px;color:var(--ink);background:var(--surface);
+    border:1px solid var(--line);border-radius:999px;padding:7px 13px;cursor:pointer;display:inline-flex;gap:7px;align-items:center}
+  .themebtn:hover{border-color:var(--accent)}
+  .hero{padding:clamp(30px,6vw,60px) 0 clamp(24px,4vw,40px)}
+  .hero h1{font-size:clamp(30px,5vw,52px);line-height:1.05;margin:.35em 0 .3em;letter-spacing:-.02em;
+    text-wrap:balance;max-width:16ch}
+  .hero h1 em{font-style:normal;color:var(--accent)}
+  .hero p.lead{font-size:clamp(17px,2.1vw,21px);color:var(--ink-soft);max-width:60ch;margin:0}
+  .hero .meta{display:flex;flex-wrap:wrap;gap:10px;margin-top:22px}
+  .tag{font-family:var(--font-mono);font-size:12px;color:var(--ink-soft);background:var(--surface);
+    border:1px solid var(--line);border-radius:6px;padding:5px 10px}
+  .tag b{color:var(--ink);font-weight:600}
+
+  /* ---- workbench layout ---- */
+  .bench{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,1fr);gap:28px;
+    align-items:start;padding:8px 0 30px}
+  @media(max-width:900px){.bench{grid-template-columns:1fr}}
+
+  /* ---- the machine ---- */
+  .machine-col{position:sticky;top:16px}
+  @media(max-width:900px){.machine-col{position:static}}
+  .bezel{background:linear-gradient(160deg,var(--machine-edge),var(--machine));
+    border:1px solid #0000;border-radius:16px;padding:16px;box-shadow:var(--shadow);
+    outline:1px solid var(--line)}
+  .bezel .head{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;padding:0 4px}
+  .leds{display:flex;gap:14px;align-items:center}
+  .led{display:flex;align-items:center;gap:7px;font-family:var(--font-mono);font-size:11px;
+    letter-spacing:.08em;text-transform:uppercase;color:#8aa79a}
+  .dot{width:9px;height:9px;border-radius:50%;background:#2c3a33;box-shadow:inset 0 0 0 1px #ffffff14}
+  .led.on .dot{background:var(--led-on);box-shadow:0 0 9px var(--led-on)}
+  .led.warn .dot{background:var(--led-warn);box-shadow:0 0 9px var(--led-warn)}
+  .badge{font-family:var(--font-mono);font-size:11px;color:#9fbcae;border:1px solid #ffffff1a;
+    border-radius:999px;padding:3px 9px}
+  .screen-frame{position:relative;border-radius:10px;overflow:hidden;background:var(--screen);
+    border:1px solid #000;box-shadow:inset 0 0 60px #000a, inset 0 0 0 1px #ffffff08}
+  .screen{margin:0;padding:18px 18px 20px;min-height:340px;font-family:var(--font-mono);
+    font-size:14px;line-height:1.5;color:var(--phosphor);white-space:pre-wrap;word-break:break-word;
+    text-shadow:0 0 7px #57e08a4d;position:relative;z-index:2}
+  .screen .l-banner{color:#8ff0b3;font-weight:600}
+  .screen .l-banner-sub{color:var(--phosphor-dim)}
+  .screen .l-ok{color:#7fe6a3}
+  .screen .l-info{color:#cfe8d8}
+  .screen .l-trap{color:var(--led-warn);text-shadow:0 0 7px #f0b24a4d}
+  .screen .l-prompt{color:#eaf6ee}
+  .screen .cur{display:inline-block;width:8px;height:1.05em;vertical-align:-2px;background:var(--phosphor);
+    box-shadow:0 0 8px var(--phosphor);animation:blink 1.1s steps(1) infinite}
+  @keyframes blink{50%{opacity:0}}
+  .scan{position:absolute;inset:0;z-index:3;pointer-events:none;
+    background:repeating-linear-gradient(#0000 0 2px,#0000000f 2px 3px);mix-blend-mode:multiply;opacity:.5}
+  .vig{position:absolute;inset:0;z-index:3;pointer-events:none;
+    background:radial-gradient(120% 90% at 50% 42%,#0000 55%,#000a 100%)}
+  .controls{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px;padding:0 2px}
+  .btn{font-family:var(--font-mono);font-size:13px;font-weight:600;cursor:pointer;border-radius:9px;
+    padding:9px 15px;border:1px solid #ffffff1f;background:#ffffff10;color:#dff2e7;display:inline-flex;gap:8px;align-items:center}
+  .btn:hover{border-color:var(--led-on);color:#fff}
+  .btn.primary{background:var(--accent);border-color:var(--accent);color:#1a0f02}
+  .btn.primary:hover{background:var(--accent-2)}
+  .machine-note{font-size:12.5px;color:var(--ink-soft);margin:12px 4px 0;line-height:1.5}
+  .machine-note code{font-family:var(--font-mono);color:var(--accent)}
+
+  /* ---- guided tour ---- */
+  .tour h2{font-size:13px;font-family:var(--font-mono);text-transform:uppercase;letter-spacing:.12em;
+    color:var(--ink-soft);margin:0 0 4px;font-weight:600}
+  .progress{display:flex;gap:6px;margin:14px 0 18px}
+  .pip{height:4px;flex:1;border-radius:999px;background:var(--line)}
+  .pip.done{background:var(--accent-2)}
+  .pip.active{background:var(--accent)}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:14px;
+    padding:22px clamp(18px,3vw,26px);box-shadow:var(--shadow)}
+  .step-n{font-family:var(--font-mono);font-size:12px;color:var(--accent);font-weight:600;letter-spacing:.08em}
+  .card h3{font-size:clamp(20px,2.6vw,25px);margin:6px 0 2px;letter-spacing:-.01em;text-wrap:balance}
+  .card .ms{font-family:var(--font-mono);font-size:11px;color:var(--ink-soft);text-transform:uppercase;letter-spacing:.1em}
+  .watch{margin:16px 0;padding:12px 14px;border-left:3px solid var(--accent);background:var(--accent-ghost);
+    border-radius:0 8px 8px 0;font-size:14.5px}
+  .watch b{font-family:var(--font-mono);font-size:11px;text-transform:uppercase;letter-spacing:.1em;
+    color:var(--accent);display:block;margin-bottom:3px}
+  details.predict{margin:16px 0;border:1px dashed var(--line);border-radius:10px;background:var(--surface-2);overflow:hidden}
+  details.predict>summary{cursor:pointer;padding:13px 16px;font-weight:600;font-size:14.5px;list-style:none;
+    display:flex;gap:10px;align-items:center}
+  details.predict>summary::-webkit-details-marker{display:none}
+  details.predict>summary::before{content:"?";font-family:var(--font-mono);width:22px;height:22px;flex:none;
+    display:grid;place-items:center;border-radius:6px;background:var(--accent);color:#1a0f02;font-weight:700;font-size:13px}
+  details.predict[open]>summary::before{content:"!"}
+  details.predict .ans{padding:0 16px 16px 48px;font-size:14.5px;color:var(--ink)}
+  .explain{font-size:15px;margin:14px 0 0}
+  .explain p{margin:0 0 10px}
+  .explain code{font-family:var(--font-mono);font-size:.9em;background:var(--surface-2);padding:1px 5px;border-radius:5px;color:var(--accent)}
+  .links{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px;padding-top:16px;border-top:1px solid var(--line)}
+  .links a{font-family:var(--font-mono);font-size:12px;text-decoration:none;border:1px solid var(--line);
+    border-radius:7px;padding:6px 11px;color:var(--ink);display:inline-flex;gap:7px;align-items:center}
+  .links a:hover{border-color:var(--accent);color:var(--accent)}
+  .links a .ic{color:var(--accent)}
+  .nav{display:flex;justify-content:space-between;gap:12px;margin-top:16px}
+  .nav button{font-family:var(--font-mono);font-size:13px;cursor:pointer;border-radius:9px;padding:10px 16px;
+    border:1px solid var(--line);background:var(--surface);color:var(--ink);font-weight:600}
+  .nav button:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}
+  .nav button:disabled{opacity:.4;cursor:not-allowed}
+  .nav .next{background:var(--accent);border-color:var(--accent);color:#1a0f02}
+  .nav .next:hover{background:var(--accent-2);color:#1a0f02}
+
+  /* ---- annotated log ---- */
+  .section{padding:44px 0;border-top:1px solid var(--line)}
+  .section>.eyebrow{margin-bottom:8px}
+  .section h2.big{font-size:clamp(22px,3vw,30px);margin:0 0 6px;letter-spacing:-.01em;text-wrap:balance}
+  .section p.sub{color:var(--ink-soft);max-width:62ch;margin:0 0 24px}
+  .log{border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--surface)}
+  .logrow{border-top:1px solid var(--line)}
+  .logrow:first-child{border-top:none}
+  .logrow>summary{cursor:pointer;list-style:none;display:flex;gap:14px;align-items:center;padding:11px 16px;font-family:var(--font-mono);font-size:13.5px}
+  .logrow>summary::-webkit-details-marker{display:none}
+  .logrow .gutter{color:var(--phosphor-dim);width:22px;text-align:right;flex:none;font-size:12px}
+  .logrow .txt{color:var(--ink);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .logrow .txt.k-ok{color:#3f9e6b}
+  .logrow .txt.k-trap{color:#b5852a}
+  .logrow[open] .txt{white-space:normal}
+  .logrow .more{font-family:var(--font-mono);font-size:11px;color:var(--accent);flex:none}
+  .logrow[data-note="0"]>summary{cursor:default}
+  .logrow[data-note="0"] .more{visibility:hidden}
+  .logrow .note{padding:2px 16px 16px 52px;font-size:14px;color:var(--ink-soft);line-height:1.55}
+  .logrow .note a{font-family:var(--font-mono);font-size:12.5px}
+
+  /* ---- roadmap / cta ---- */
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+  @media(max-width:760px){.grid2{grid-template-columns:1fr}}
+  .panel{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:24px;box-shadow:var(--shadow)}
+  .panel h3{margin:0 0 12px;font-size:18px}
+  ol.road{list-style:none;counter-reset:r;margin:0;padding:0;display:flex;flex-direction:column;gap:2px}
+  ol.road li{display:flex;gap:12px;align-items:baseline;padding:7px 0;border-bottom:1px dashed var(--line);font-size:14.5px}
+  ol.road li:last-child{border-bottom:none}
+  ol.road li .n{font-family:var(--font-mono);font-size:12px;color:var(--accent);width:26px;flex:none}
+  ol.road li .st{margin-left:auto;font-family:var(--font-mono);font-size:11px;padding:2px 8px;border-radius:999px;flex:none}
+  .st.done{background:#3f9e6b22;color:#3f9e6b}
+  .st.now{background:var(--accent-ghost);color:var(--accent)}
+  .st.todo{background:var(--surface-2);color:var(--ink-soft)}
+  .run code{display:block;font-family:var(--font-mono);font-size:13px;background:var(--screen);color:var(--phosphor);
+    padding:14px 16px;border-radius:9px;margin:10px 0;white-space:pre-wrap;line-height:1.7}
+  .run p{font-size:14.5px;margin:0 0 6px}
+  footer{border-top:1px solid var(--line);padding:30px 0 50px;color:var(--ink-soft);font-size:13px}
+  footer .mono{color:var(--ink)}
+  @media (prefers-reduced-motion:reduce){.screen .cur{animation:none}}
+</style>
+
+<header class="top">
+  <div class="wrap">
+    <div class="topbar">
+      <div class="brand">
+        <span class="kanji">自然</span>
+        <span class="name">Ziran OS</span>
+        <span class="rev">learn-as-it-boots</span>
+      </div>
+      <button class="themebtn" id="theme" aria-label="Toggle color theme"><span id="theme-ic">◐</span><span id="theme-tx">Theme</span></button>
+    </div>
+    <div class="hero">
+      <div class="eyebrow">A from-scratch operating system, explained while it runs</div>
+      <h1>Boot a real OS in this tab — then learn <em>how every layer works</em>.</h1>
+      <p class="lead">No Linux underneath. This is a hand-written kernel — assembly boot code, a <span class="mono">no_std</span> Rust core, its own interrupt and keyboard handling — running on a tiny PC emulator right here. The tour beside it asks you to guess what happens, then shows you why.</p>
+      <div class="meta">
+        <span class="tag"><b>Milestones 0–5</b> booted</span>
+        <span class="tag">from <b>512 bytes</b> to a live keyboard</span>
+        <span class="tag">every claim links to <b>real source</b></span>
+      </div>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+  <div class="bench">
+    <!-- MACHINE -->
+    <div class="machine-col">
+      <div class="bezel">
+        <div class="head">
+          <div class="leds">
+            <span class="led on" id="led-pwr"><span class="dot"></span>power</span>
+            <span class="led" id="led-run"><span class="dot"></span>run</span>
+            <span class="led" id="led-irq"><span class="dot"></span>irq</span>
+          </div>
+          <span class="badge" id="mode-badge">booting…</span>
+        </div>
+        <div class="screen-frame">
+          <pre class="screen" id="screen" tabindex="0" aria-label="Ziran OS screen. Click, then type."></pre>
+          <div class="scan"></div>
+          <div class="vig"></div>
+        </div>
+        <div class="controls">
+          <button class="btn primary" id="boot">▸ Boot</button>
+          <button class="btn" id="restart">↺ Restart</button>
+          <span class="badge" id="hint" style="align-self:center">click the screen, then type</span>
+        </div>
+      </div>
+      <p class="machine-note" id="mnote">Live mode loads the actual kernel image (<code>kernel.bin</code>) into the v86 emulator. If the emulator can’t be reached, this falls back to a faithful replay of the same boot so the lesson still works.</p>
+    </div>
+
+    <!-- GUIDED TOUR -->
+    <div class="tour">
+      <h2>Guided tour</h2>
+      <div class="progress" id="progress"></div>
+      <div class="card" id="card"></div>
+      <div class="nav">
+        <button id="prev" disabled>← Back</button>
+        <button class="next" id="next">Next →</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ANNOTATED LOG -->
+  <section class="section">
+    <div class="eyebrow">Line by line</div>
+    <h2 class="big">Everything the kernel prints, and what it means</h2>
+    <p class="sub">This is the exact output above — but each line you can open is a small window into the layer that produced it. Nothing here is decorative; it’s what the machine actually did.</p>
+    <div class="log" id="log"></div>
+  </section>
+
+  <!-- ROADMAP + RUN -->
+  <section class="section">
+    <div class="grid2">
+      <div class="panel">
+        <h3>Where this is going</h3>
+        <ol class="road" id="road"></ol>
+      </div>
+      <div class="panel run">
+        <h3>Run the real thing yourself</h3>
+        <p>The whole point is to build it, not just watch. Clone it and boot the actual kernel under QEMU:</p>
+        <code>make            # assemble + compile + link
+make run        # boot it in a QEMU window
+make debug      # boot frozen, attach GDB</code>
+        <p>Then read the source and the concept docs, and follow the milestone build-log. Each milestone is one working state and one honest write-up — including what broke.</p>
+        <div class="links" style="border:none;padding:0;margin-top:14px">
+          <a id="lk-repo" href="#"><span class="ic">▸</span> the repository</a>
+          <a id="lk-concepts" href="#"><span class="ic">▸</span> concept explainers</a>
+          <a id="lk-blog" href="#"><span class="ic">▸</span> the build log</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <div><span class="mono">自然 · Ziran OS</span> — “self-so,” that which arises without external forcing. A hobby OS built to understand every layer, and a tool built to teach them.</div>
+  </footer>
+</main>
+
+<script>
+(function(){
+  "use strict";
+  // ---- where the real files live (edit if you fork/deploy elsewhere) ----
+  var REPO = "https://github.com/kenlacroix/ZiranOS";
+  var BRANCH = "claude/ziran-os-plan-qgobid";
+  var BLOB = REPO + "/blob/" + BRANCH + "/";
+  // v86 assets — served locally in the repo build, or from a CDN as fallback.
+  // (Named ASSET, not V86, so it never shadows the global V86 constructor.)
+  var ASSET = {
+    lib: "https://cdn.jsdelivr.net/npm/v86@0.5.228/build/libv86.js",
+    wasm:"https://cdn.jsdelivr.net/npm/v86@0.5.228/build/v86.wasm",
+    bios:"https://cdn.jsdelivr.net/gh/copy/v86@master/bios/seabios.bin",
+    vga: "https://cdn.jsdelivr.net/gh/copy/v86@master/bios/vgabios.bin",
+    kernel:"kernel.bin"
+  };
+  var src = function(f){ return BLOB + f; };
+
+  // ---- the exact VGA output the kernel produces (M0-5), faithfully ----
+  var SCREEN = [
+    {t:"Ziran OS  --  ■■", c:"banner",
+     note:"The banner asks for 自然 (zìrán, “self-so”). But the VGA text font is a 256-glyph ROM with no entry for those code points, so the kernel’s writer substitutes byte 0xFE (■) for anything non-ASCII. Your very first encounter with a character-encoding boundary: the screen literally cannot represent what the source asked for.",
+     link:{f:"src/vga_buffer.rs",l:"vga_buffer.rs"}},
+    {t:"self-so: that which arises naturally without external forcing", c:"banner-sub"},
+    {t:"", c:"blank"},
+    {t:"[ok] reached 64-bit long mode", c:"ok",
+     note:"Before this line, hand-written assembly checked the CPU supported 64-bit mode, built the first page tables, enabled paging, and switched the processor from 32-bit to 64-bit “long mode.” Only then did it jump into Rust.",
+     link:{f:"boot/boot.asm",l:"boot.asm"}},
+    {t:"[ok] Rust kernel_main() running with no OS underneath", c:"ok",
+     note:"no_std Rust: no standard library (it assumes an OS to call), no runtime, no garbage collector, nothing beneath us. Just the language and the bare machine.",
+     link:{f:"src/lib.rs",l:"lib.rs"}},
+    {t:"[ok] VGA text output online (writing straight to 0xb8000)", c:"ok",
+     note:"Every character on this screen is two bytes written to physical address 0xb8000 — the VGA text buffer — one for the glyph, one for the color. No driver, no syscall, no library.",
+     link:{f:"src/vga_buffer.rs",l:"vga_buffer.rs"}},
+    {t:"", c:"blank"},
+    {t:"triggering a test breakpoint (int3)...", c:"info",
+     note:"The kernel is about to break itself on purpose. int3 raises exception vector 3 — a “breakpoint.” On a kernel with no handler, an exception cascades to a triple fault and the machine silently reboots.",
+     link:{f:"docs/concepts/interrupts.md",l:"interrupts.md"}},
+    {t:"[trap] breakpoint (#BP) at 0x0000000000101a20 -- handled, resuming", c:"trap",
+     note:"…but it was caught. The Interrupt Descriptor Table routed the breakpoint to a handler that printed this and RETURNED, resuming right where it left off. This one line proves the entire interrupt path works.",
+     link:{f:"src/interrupts.rs",l:"interrupts.rs"}},
+    {t:"[ok] survived the breakpoint -- interrupts work, execution resumed", c:"ok"},
+    {t:"", c:"blank"},
+    {t:"keyboard is live -- type something:", c:"prompt",
+     note:"Hardware interrupts are now enabled for the first time. The CPU sleeps in a halt loop; each key you press raises IRQ1 through the interrupt controller, wakes the CPU, the handler echoes the character, and it sleeps again. It is not polling — it is genuinely asleep between keystrokes.",
+     link:{f:"docs/concepts/keyboard-and-pic.md",l:"keyboard-and-pic.md"}}
+  ];
+
+  // ---- the guided tour (predict -> observe -> explain) ----
+  var STEPS = [
+    {n:"01", ms:"Milestones 0–2 · boot", title:"There is nothing under this",
+     watch:"The screen fills with a banner and “reached 64-bit long mode.”",
+     q:"What operating system is running underneath this one?",
+     a:"None. There’s no Linux, no host OS inside the emulated machine — just this kernel on the bare (virtual) processor. v86 emulates a PC; the very first instruction it runs is our own boot code.",
+     ex:"<p>A real PC powers on in a primitive 16/32-bit mode. Getting to modern 64-bit “long mode” is a specific ritual: verify the CPU can do it, build page tables, enable paging, flip the long-mode bit, and far-jump into a 64-bit code segment. We hand-wrote that in assembly so every instruction is understood, then handed control to Rust.</p>",
+     links:[["boot/boot.asm","boot.asm"],["boot/long_mode_init.asm","long_mode_init.asm"]]},
+    {n:"02", ms:"Milestone 3 · output", title:"How it talks with no OS to ask",
+     watch:"The three green “[ok]” lines.",
+     q:"With no operating system and no driver, how does a character appear on screen at all?",
+     a:"By writing bytes to a fixed memory address. In VGA text mode, memory address 0xb8000 IS the screen — store a character byte and a color byte there, and the glyph appears. That’s the entire “graphics stack.”",
+     ex:"<p>The writer keeps a cursor, handles newlines and scrolling, and writes each cell as <code>volatile</code> — the compiler must never optimize these away, because the “memory” is really hardware. Printing is just very deliberate poking at <code>0xb8000</code>.</p>",
+     links:[["src/vga_buffer.rs","vga_buffer.rs"]]},
+    {n:"03", ms:"encoding", title:"The characters that couldn’t",
+     watch:"The first line: “Ziran OS  --  ■■”.",
+     q:"The source asks for 自然. Why do you see two boxes instead?",
+     a:"Because the VGA font is a fixed ROM of 256 glyphs — basically ASCII plus some symbols. It has no glyph for 自 or 然, so the writer substitutes byte 0xFE (■) for any non-ASCII character rather than draw garbage.",
+     ex:"<p>This is a tiny, honest lesson in the gap between <em>text</em> (abstract code points) and <em>glyphs</em> (pictures a device can actually draw). Unicode is enormous; this font knows 256 shapes. Bridging that gap is what fonts, encodings, and later a real framebuffer are for.</p>",
+     links:[["src/vga_buffer.rs","vga_buffer.rs"]]},
+    {n:"04", ms:"Milestone 4 · interrupts", title:"Failing on purpose",
+     watch:"“triggering a test breakpoint” → “[trap] breakpoint (#BP) … handled.”",
+     q:"What normally happens when a kernel hits an error it has no handler for?",
+     a:"It escalates: fault → double fault → triple fault → the machine resets, with no message. That silent reboot is the most disorienting thing in early OS work. Here, the breakpoint is caught and execution continues.",
+     ex:"<p>An <em>Interrupt Descriptor Table</em> maps each of 256 possible interrupts/exceptions to a handler. We fire <code>int3</code> deliberately; the table routes it, the handler prints and returns. Because it’s a self-inflicted, recoverable break, surviving it proves the table, the assembly entry stubs, and the return path are all correct.</p>",
+     links:[["src/interrupts.rs","interrupts.rs"],["docs/concepts/interrupts.md","interrupts.md (explainer)"]]},
+    {n:"05", ms:"Milestone 5 · keyboard", title:"It listens now — try it",
+     watch:"“keyboard is live — type something.” Click the screen and type.",
+     q:"Is the CPU sitting in a loop asking “any key yet?” — or is it doing something else?",
+     a:"Neither loop nor poll. The CPU is halted — genuinely asleep. Pressing a key raises a hardware interrupt (IRQ1) that wakes it just long enough to read the key and echo it, then it halts again. That’s how a real OS idles at near-zero power.",
+     ex:"<p>The keyboard controller offers a <em>scancode</em> at I/O port 0x60 and raises IRQ1. The interrupt controller (PIC) — which we had to reprogram so its interrupts don’t collide with CPU exceptions — delivers it; the handler reads the byte, translates it (US layout, with shift), echoes it, and acknowledges the controller so the next key can come. Forget that acknowledgement and the keyboard dies after exactly one press.</p>",
+     links:[["src/keyboard.rs","keyboard.rs"],["src/pic.rs","pic.rs"],["docs/concepts/keyboard-and-pic.md","keyboard-and-pic.md (explainer)"]]},
+    {n:"06", ms:"what’s next", title:"You’ve reached the current edge",
+     watch:"This is as far as the OS is built — milestone 5 of 12.",
+     q:"So what turns “a machine that echoes keys” into “an operating system”?",
+     a:"The next layers: knowing what memory exists, managing it, running more than one thing at once, a shell, and files. Each is a milestone below — and each is meant to be built and understood, not just shipped.",
+     ex:"<p>The honest goal of this project isn’t a product; it’s understanding, with a public trail of how it was built — including the dead ends. This page exists so that trail is something you can <em>boot and poke at</em>, not just read. If you take one idea away: an OS is not magic, it’s a stack of small, knowable mechanisms, each of which you can hand-write.</p>",
+     links:[["STATUS.md","the milestone tracker"],["docs/blog","the build log"]]}
+  ];
+
+  var ROAD = [
+    ["0–3","Boot, long mode, VGA text","done"],
+    ["4","Interrupts / exceptions","done"],
+    ["5","Keyboard input","done"],
+    ["6","Physical memory","now"],
+    ["7","Paging / virtual memory","todo"],
+    ["8","Heap (Vec, Box, String)","todo"],
+    ["9","Timer + scheduling","todo"],
+    ["10","A shell","todo"],
+    ["11","Filesystem","todo"],
+    ["12","File manager (the goal)","todo"]
+  ];
+
+  // ---------- helpers ----------
+  var $ = function(id){ return document.getElementById(id); };
+  function esc(s){ return s.replace(/[&<>]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;"}[c];}); }
+
+  // ---------- theme ----------
+  (function(){
+    var root=document.documentElement, b=$("theme");
+    function apply(t){ root.setAttribute("data-theme",t); $("theme-ic").textContent = t==="dark"?"☾":"☀"; }
+    var cur = matchMedia("(prefers-color-scheme: dark)").matches ? "dark":"light";
+    apply(cur);
+    b.addEventListener("click",function(){ cur = cur==="dark"?"light":"dark"; apply(cur); });
+  })();
+
+  // ---------- source links ----------
+  $("lk-repo").href = REPO;
+  $("lk-concepts").href = BLOB + "docs/concepts";
+  $("lk-blog").href = BLOB + "docs/blog";
+
+  // ---------- build the guided tour ----------
+  var idx = 0;
+  function renderProgress(){
+    var p=$("progress"); p.innerHTML="";
+    STEPS.forEach(function(_,i){
+      var d=document.createElement("div");
+      d.className="pip"+(i<idx?" done":"")+(i===idx?" active":"");
+      p.appendChild(d);
+    });
+  }
+  function renderStep(){
+    var s=STEPS[idx];
+    var links = s.links.map(function(l){
+      var href = l[0].indexOf("docs/blog")===0||l[0].indexOf("STATUS")===0 ? BLOB+l[0] : src(l[0]);
+      return '<a href="'+href+'" target="_blank" rel="noopener"><span class="ic">↗</span>'+esc(l[1])+'</a>';
+    }).join("");
+    $("card").innerHTML =
+      '<div class="step-n">STEP '+s.n+'</div>'+
+      '<div class="ms">'+esc(s.ms)+'</div>'+
+      '<h3>'+esc(s.title)+'</h3>'+
+      '<div class="watch"><b>Watch for</b>'+esc(s.watch)+'</div>'+
+      '<details class="predict"><summary>Predict: '+esc(s.q)+'</summary><div class="ans">'+esc(s.a)+'</div></details>'+
+      '<div class="explain">'+s.ex+'</div>'+
+      '<div class="links">'+links+'</div>';
+    $("prev").disabled = idx===0;
+    $("next").textContent = idx===STEPS.length-1 ? "Start over ↺" : "Next →";
+    renderProgress();
+  }
+  $("prev").addEventListener("click",function(){ if(idx>0){idx--;renderStep();window.scrollTo({top:0,behavior:"smooth"});} });
+  $("next").addEventListener("click",function(){ idx = idx===STEPS.length-1?0:idx+1; renderStep(); if(idx===0)window.scrollTo({top:0,behavior:"smooth"}); });
+  renderStep();
+
+  // ---------- annotated log ----------
+  (function(){
+    var log=$("log"), g=0;
+    SCREEN.forEach(function(ln){
+      if(ln.c==="blank") return;
+      g++;
+      var hasNote = ln.note?1:0;
+      var kcls = ln.c==="ok"?"k-ok":(ln.c==="trap"?"k-trap":"");
+      var d=document.createElement("details");
+      d.className="logrow"; d.setAttribute("data-note",hasNote);
+      var linkHtml = (ln.link)?' &nbsp;<a href="'+src(ln.link.f)+'" target="_blank" rel="noopener">'+esc(ln.link.l)+' ↗</a>':'';
+      d.innerHTML =
+        '<summary><span class="gutter">'+g+'</span>'+
+        '<span class="txt '+kcls+'">'+esc(ln.t||" ")+'</span>'+
+        (hasNote?'<span class="more">why ▾</span>':'')+'</summary>'+
+        (hasNote?'<div class="note">'+esc(ln.note)+linkHtml+'</div>':'');
+      log.appendChild(d);
+    });
+  })();
+
+  // ---------- roadmap ----------
+  (function(){
+    var r=$("road");
+    ROAD.forEach(function(x){
+      var li=document.createElement("li");
+      var label = x[2]==="done"?"done":(x[2]==="now"?"building":"planned");
+      li.innerHTML='<span class="n">'+x[0]+'</span><span>'+esc(x[1])+'</span><span class="st '+x[2]+'">'+label+'</span>';
+      r.appendChild(li);
+    });
+  })();
+
+  // ================= THE MACHINE =================
+  var screenEl=$("screen"), badge=$("mode-badge"), hint=$("hint");
+  var ledRun=$("led-run"), ledIrq=$("led-irq");
+  var mode=null, emulator=null, simTimer=null, simState=null;
+
+  function setLED(el,on,cls){ el.className="led"+(on?(cls?(" "+cls):" on"):""); }
+
+  // ---- simulated boot: faithfully replay SCREEN with a typewriter feel ----
+  function simBoot(){
+    mode="sim"; badge.textContent="simulated";
+    $("mnote").innerHTML="Simulated mode: the live emulator couldn’t be reached (offline, or a sandbox that blocks it), so this is a faithful replay of the exact same boot. Typing still works. Serve the repo with the v86 files present to boot the real kernel.";
+    stopSim();
+    screenEl.innerHTML=""; setLED(ledRun,false); setLED(ledIrq,false);
+    var li=0, typed=[];
+    simState={typed:typed, done:false};
+    function line(){
+      if(li>=SCREEN.length){
+        setLED(ledRun,true);
+        var c=document.createElement("span"); c.className="cur"; c.id="simcur";
+        screenEl.appendChild(document.createTextNode("")); screenEl.appendChild(c);
+        simState.done=true; hint.textContent="click the screen, then type";
+        return;
+      }
+      var ln=SCREEN[li++];
+      var span=document.createElement("span");
+      if(ln.c!=="blank") span.className="l-"+ln.c;
+      span.textContent=(ln.t||"")+"\n";
+      screenEl.appendChild(span);
+      simTimer=setTimeout(line, ln.c==="blank"?90:(ln.c==="banner"?420:230));
+    }
+    line();
+  }
+  function stopSim(){ if(simTimer){clearTimeout(simTimer);simTimer=null;} }
+
+  // typing into the simulated screen (mirrors the real keyboard echo)
+  screenEl.addEventListener("keydown",function(e){
+    if(mode!=="sim"||!simState||!simState.done) return;
+    var k=e.key;
+    if(k==="Backspace"){ e.preventDefault(); var t=simState.typed; if(t.length)t.pop(); paintTyped(); }
+    else if(k==="Enter"){ e.preventDefault(); simState.typed.push("\n"); paintTyped(); }
+    else if(k.length===1){ e.preventDefault(); simState.typed.push(k); paintTyped();
+      setLED(ledIrq,true,"warn"); setTimeout(function(){setLED(ledIrq,false);},120); }
+  });
+  function paintTyped(){
+    var cur=$("simcur"); if(!cur) return;
+    // rebuild the trailing typed text just before the cursor
+    var prev=cur.previousSibling;
+    if(prev && prev.nodeType===3) prev.textContent=simState.typed.join("");
+    else screenEl.insertBefore(document.createTextNode(simState.typed.join("")),cur);
+  }
+
+  // ---- real boot via v86, with graceful fallback to simulated ----
+  function realBoot(){
+    badge.textContent="loading emulator…";
+    var done=false;
+    var fail=function(){ if(done)return; done=true; simBoot(); };
+    var to=setTimeout(fail, 3500);              // if the CDN/script is blocked or slow
+    var s=document.createElement("script");
+    s.src=ASSET.lib;
+    s.onerror=function(){ clearTimeout(to); fail(); };
+    s.onload=function(){
+      if(done) return;
+      var Ctor = window.V86 || window.V86Starter;   // API renamed across versions
+      if(!Ctor){ clearTimeout(to); return fail(); }
+      try{
+        done=true; clearTimeout(to);
+        mode="real"; badge.textContent="live · real kernel";
+        $("mnote").innerHTML="Live mode: this is the actual <code>kernel.bin</code> running in the v86 PC emulator — the same image <code>make</code> builds. Click the screen and type to send real keystrokes.";
+        screenEl.innerHTML="";
+        emulator=new Ctor(cfg());
+        setLED(ledRun,true);
+      }catch(err){ fail(); }
+    };
+    document.head.appendChild(s);
+  }
+  function cfg(){
+    return {
+      wasm_path:ASSET.wasm,
+      screen_container:makeScreenContainer(),
+      bios:{url:ASSET.bios}, vga_bios:{url:ASSET.vga},
+      multiboot:{url:ASSET.kernel},
+      memory_size:32*1024*1024,
+      autostart:true
+    };
+  }
+  // v86 wants a container with a text <div> and a <canvas>; wrap our bezel screen.
+  function makeScreenContainer(){
+    var wrap=document.createElement("div");
+    var txt=document.createElement("div");
+    txt.style.cssText="white-space:pre;font:14px/1.5 var(--font-mono);color:var(--phosphor)";
+    var cv=document.createElement("canvas"); cv.style.display="none";
+    wrap.appendChild(txt); wrap.appendChild(cv);
+    screenEl.textContent=""; screenEl.appendChild(wrap);
+    return wrap;
+  }
+
+  function boot(){
+    stopSim();
+    if(emulator && emulator.destroy){ try{emulator.destroy();}catch(e){} emulator=null; }
+    // Try the real emulator; it self-falls-back to simulated if unavailable.
+    realBoot();
+  }
+  $("boot").addEventListener("click",function(){ screenEl.focus(); boot(); });
+  $("restart").addEventListener("click",function(){ boot(); });
+
+  // autostart the tour's machine (simulated-first is instant; real upgrades if reachable)
+  boot();
+})();
+</script>
+
+</body>
+</html>

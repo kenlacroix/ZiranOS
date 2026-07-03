@@ -45,7 +45,7 @@ ifeq ($(PROFILE),debug)
     CARGO_FLAGS :=
 endif
 
-.PHONY: all iso run run-headless debug gdb clean check-header
+.PHONY: all iso run run-headless debug gdb clean check-header web
 
 all: $(KERNEL)
 
@@ -113,6 +113,14 @@ debug: $(ISO)
 gdb:
 	gdb $(KERNEL) -ex "target remote :1234"
 
+# Stage the kernel image for the browser tutorial (web/). Live mode loads
+# web/kernel.bin; see web/README.md for serving and self-hosting the v86 files.
+web: $(KERNEL)
+	cp $(KERNEL) web/kernel.bin
+	@echo "copied $(KERNEL) -> web/kernel.bin"
+	@echo "serve it:  cd web && python3 -m http.server 8000  # then open localhost:8000"
+
 clean:
 	cargo clean
 	rm -rf build
+	rm -f web/kernel.bin

@@ -46,6 +46,9 @@ Security (only once there's a boundary — see PLAN.md §8)
 Reflect
 - [ ] /retro — post-mortem answered honestly
 - [ ] /document-milestone — STATUS.md ✅, README status, blog post promoted
+- [ ] Teaching tool updated — if this milestone changed the boot output or added
+      a demoable behavior, add its line(s) to `web/index.html`'s `SCREEN` and a
+      tour step to `STEPS` (the tutorial grows with the OS)
 - [ ] CI green (build + headless QEMU boot)
 - [ ] Committed and pushed (docs and code as separate commits where it helps)
 ```
