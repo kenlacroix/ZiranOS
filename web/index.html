@@ -309,13 +309,23 @@ make debug      # boot frozen, attach GDB</code>
   var BLOB = REPO + "/blob/" + BRANCH + "/";
   // v86 assets — served locally in the repo build, or from a CDN as fallback.
   // (Named ASSET, not V86, so it never shadows the global V86 constructor.)
+  // Self-hosted v86 assets, sitting next to index.html (see web/README.md).
+  // These replace the old pinned 0.5.228 CDN URLs, which 404'd — the correct
+  // build is v86 0.5.420. Self-hosting also means no CDN dependency in an embed.
   var ASSET = {
-    lib: "https://cdn.jsdelivr.net/npm/v86@0.5.228/build/libv86.js",
-    wasm:"https://cdn.jsdelivr.net/npm/v86@0.5.228/build/v86.wasm",
-    bios:"https://cdn.jsdelivr.net/gh/copy/v86@master/bios/seabios.bin",
-    vga: "https://cdn.jsdelivr.net/gh/copy/v86@master/bios/vgabios.bin",
+    lib: "libv86.js",
+    wasm:"v86.wasm",
+    bios:"seabios.bin",
+    vga: "vgabios.bin",
     kernel:"kernel.bin"
   };
+  // Live boot is gated OFF until the kernel is actually v86-loadable. Verified
+  // in libv86.js: v86 only scans for the Multiboot *1* magic (0x1BADB002) and
+  // its ELF loader is 32-bit only. Ziran is a 64-bit Multiboot *2* image, which
+  // v86 cannot load — so an honest page must NOT pretend it booted live. Once a
+  // small 32-bit Multiboot1 trampoline lands (see docs/planning/), boots it in a
+  // browser, and prints the serial marker, flip this to true.
+  var LIVE_READY = false;
   var src = function(f){ return BLOB + f; };
 
   // ---- the exact VGA output the kernel produces (M0-5), faithfully ----
@@ -490,9 +500,12 @@ make debug      # boot frozen, attach GDB</code>
   function setLED(el,on,cls){ el.className="led"+(on?(cls?(" "+cls):" on"):""); }
 
   // ---- simulated boot: faithfully replay SCREEN with a typewriter feel ----
-  function simBoot(){
-    mode="sim"; badge.textContent="simulated";
-    $("mnote").innerHTML="Simulated mode: the live emulator couldn’t be reached (offline, or a sandbox that blocks it), so this is a faithful replay of the exact same boot. Typing still works. Serve the repo with the v86 files present to boot the real kernel.";
+  function simBoot(reason){
+    mode="sim"; badge.textContent="reconstruction";
+    var why = (reason==="notready")
+      ? "This is a <b>faithful reconstruction</b> of the exact serial/VGA output the real kernel produces — not yet the live emulator. v86 can only boot a 32-bit Multiboot 1 image, and Ziran is currently a 64-bit Multiboot 2 kernel, so a live boot needs a small 32-bit Multiboot1 trampoline (a tracked next step). "
+      : "The live emulator couldn’t be reached (offline, blocked, or missing v86 files), so this is a <b>faithful reconstruction</b> of the same boot. ";
+    $("mnote").innerHTML = why + "Every line below is what the kernel actually prints; typing echoes locally, the way the real keyboard driver echoes it.";
     stopSim();
     screenEl.innerHTML=""; setLED(ledRun,false); setLED(ledIrq,false);
     var li=0, typed=[];
@@ -533,37 +546,50 @@ make debug      # boot frozen, attach GDB</code>
     else screenEl.insertBefore(document.createTextNode(simState.typed.join("")),cur);
   }
 
-  // ---- real boot via v86, with graceful fallback to simulated ----
+  // ---- real boot via v86, with an HONEST live gate ----
+  // Only claims "live" once the actual kernel prints its serial marker. If v86
+  // can't be reached OR never boots our image (see LIVE_READY), it falls back to
+  // the reconstruction and says why — it never fakes a live badge.
   function realBoot(){
     badge.textContent="loading emulator…";
-    var done=false;
-    var fail=function(){ if(done)return; done=true; simBoot(); };
-    var to=setTimeout(fail, 3500);              // if the CDN/script is blocked or slow
+    var decided=false;
+    var fallback=function(){ if(decided)return; decided=true; simBoot("unreachable"); };
+    var to=setTimeout(fallback, 6000);          // no real boot marker in time -> reconstruction
     var s=document.createElement("script");
     s.src=ASSET.lib;
-    s.onerror=function(){ clearTimeout(to); fail(); };
+    s.onerror=function(){ clearTimeout(to); fallback(); };
     s.onload=function(){
-      if(done) return;
-      var Ctor = window.V86 || window.V86Starter;   // API renamed across versions
-      if(!Ctor){ clearTimeout(to); return fail(); }
+      var Ctor = window.V86 || window.V86Starter;   // 0.5.420 exposes window.V86
+      if(!Ctor){ clearTimeout(to); return fallback(); }
       try{
-        done=true; clearTimeout(to);
-        mode="real"; badge.textContent="live · real kernel";
-        $("mnote").innerHTML="Live mode: this is the actual <code>kernel.bin</code> running in the v86 PC emulator — the same image <code>make</code> builds. Click the screen and type to send real keystrokes.";
-        screenEl.innerHTML="";
+        badge.textContent="booting emulator…";
+        screenEl.innerHTML=""; mode="real";
         emulator=new Ctor(cfg());
-        setLED(ledRun,true);
-      }catch(err){ fail(); }
+        // The one honest signal that this is real: the kernel's own serial line.
+        var line="";
+        emulator.add_listener("serial0-output-byte", function(b){
+          var ch=String.fromCharCode(b);
+          if(ch==="\n"||ch==="\r"){
+            if(!decided && line.indexOf("Ziran OS booted")>=0){
+              decided=true; clearTimeout(to);
+              badge.textContent="live · real kernel"; setLED(ledRun,true);
+              $("mnote").innerHTML="Live mode: the text above was printed by the actual <code>kernel.bin</code> running in the v86 emulator — not replayed. Keystrokes go to the real keyboard driver.";
+            }
+            line="";
+          } else { line += ch; }
+        });
+      }catch(err){ clearTimeout(to); fallback(); }
     };
     document.head.appendChild(s);
   }
   function cfg(){
     return {
-      wasm_path:ASSET.wasm,
+      wasm_path:ASSET.wasm,                       // v86 wants a plain string here
       screen_container:makeScreenContainer(),
       bios:{url:ASSET.bios}, vga_bios:{url:ASSET.vga},
       multiboot:{url:ASSET.kernel},
-      memory_size:32*1024*1024,
+      memory_size:64*1024*1024,
+      vga_memory_size:8*1024*1024,
       autostart:true
     };
   }
@@ -581,8 +607,10 @@ make debug      # boot frozen, attach GDB</code>
   function boot(){
     stopSim();
     if(emulator && emulator.destroy){ try{emulator.destroy();}catch(e){} emulator=null; }
-    // Try the real emulator; it self-falls-back to simulated if unavailable.
-    realBoot();
+    // Show the faithful reconstruction immediately. Once the kernel is actually
+    // v86-loadable (LIVE_READY), attempt a real boot that upgrades on the marker.
+    if(LIVE_READY) realBoot();
+    else simBoot("notready");
   }
   $("boot").addEventListener("click",function(){ screenEl.focus(); boot(); });
   $("restart").addEventListener("click",function(){ boot(); });
