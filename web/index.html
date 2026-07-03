@@ -208,6 +208,43 @@
   .run code{display:block;font-family:var(--font-mono);font-size:13px;background:var(--screen);color:var(--phosphor);
     padding:14px 16px;border-radius:9px;margin:10px 0;white-space:pre-wrap;line-height:1.7}
   .run p{font-size:14.5px;margin:0 0 6px}
+  /* ---- glossary + FAQ (the novice on-ramp) ---- */
+  /* Same disclosure grammar as details.mode-why / details.predict: nothing is a
+     wall of text until you open it, and it reads right in both themes because
+     every colour is a variable, never a literal. */
+  .onramp p.lede{color:var(--ink-soft);max-width:62ch;margin:0 0 22px}
+  .faq{display:flex;flex-direction:column;gap:10px;margin-bottom:34px}
+  details.qa{border:1px solid var(--line);border-radius:12px;background:var(--surface);overflow:hidden}
+  details.qa>summary{cursor:pointer;list-style:none;display:flex;gap:12px;align-items:center;
+    padding:14px 18px;font-weight:600;font-size:15.5px;text-wrap:balance}
+  details.qa>summary::-webkit-details-marker{display:none}
+  details.qa>summary::before{content:"?";font-family:var(--font-mono);width:22px;height:22px;flex:none;
+    display:grid;place-items:center;border-radius:6px;background:var(--accent);color:#1a0f02;font-weight:700;font-size:13px}
+  details.qa[open]>summary::before{content:"!"}
+  details.qa[open]>summary{color:var(--accent)}
+  details.qa .a{padding:0 18px 16px 52px;font-size:14.5px;color:var(--ink-soft);line-height:1.6}
+  details.qa .a p{margin:0 0 10px}
+  details.qa .a p:last-child{margin:0}
+  details.qa .a a{font-family:var(--font-mono);font-size:13px}
+  details.qa .a code{font-family:var(--font-mono);font-size:.9em;background:var(--surface-2);padding:1px 5px;border-radius:5px;color:var(--accent)}
+  .gloss-head{font-family:var(--font-mono);font-size:12px;letter-spacing:.12em;text-transform:uppercase;
+    color:var(--ink-soft);margin:0 0 12px;font-weight:600}
+  .gloss-groups{display:flex;flex-direction:column;gap:10px}
+  details.gloss{border:1px solid var(--line);border-radius:12px;background:var(--surface);overflow:hidden}
+  details.gloss>summary{cursor:pointer;list-style:none;display:flex;gap:12px;align-items:center;
+    padding:13px 18px;font-weight:600;font-size:15px}
+  details.gloss>summary::-webkit-details-marker{display:none}
+  details.gloss>summary .gi{font-family:var(--font-mono);font-size:12px;color:var(--accent);flex:none}
+  details.gloss>summary::after{content:"▸";margin-left:auto;color:var(--ink-soft);font-size:12px}
+  details.gloss[open]>summary::after{content:"▾";color:var(--accent)}
+  details.gloss[open]>summary{border-bottom:1px solid var(--line)}
+  dl.gloss-dl{margin:0;padding:6px 18px 16px}
+  dl.gloss-dl dt{font-weight:600;font-size:14.5px;margin:14px 0 3px;color:var(--ink)}
+  dl.gloss-dl dt:first-child{margin-top:6px}
+  dl.gloss-dl dt .term-alt{font-family:var(--font-mono);font-size:.82em;color:var(--accent);font-weight:600}
+  dl.gloss-dl dd{margin:0;font-size:14px;color:var(--ink-soft);line-height:1.55}
+  dl.gloss-dl dd code{font-family:var(--font-mono);font-size:.88em;color:var(--accent)}
+
   footer{border-top:1px solid var(--line);padding:30px 0 50px;color:var(--ink-soft);font-size:13px}
   footer .mono{color:var(--ink)}
   @media (prefers-reduced-motion:reduce){.screen .cur{animation:none}}
@@ -307,6 +344,125 @@ make debug      # boot frozen, attach GDB</code>
           <a id="lk-blog" href="#"><span class="ic">▸</span> the build log</a>
         </div>
       </div>
+    </div>
+  </section>
+
+  <!-- GLOSSARY + FAQ (novice on-ramp) -->
+  <section class="section onramp">
+    <div class="eyebrow">New here?</div>
+    <h2 class="big">A plain-language glossary</h2>
+    <p class="lede">This page uses a lot of words that only mean something once you’ve written kernel code — and that’s a chicken-and-egg problem. So here’s a friendly dictionary and a few honest answers. You don’t need any of it to enjoy the tour; open whatever’s puzzling you and read just that.</p>
+
+    <div class="faq">
+      <details class="qa" open>
+        <summary>What am I actually looking at?</summary>
+        <div class="a">
+          <p>Two things side by side. On the left is a little pretend computer with a green screen — an operating system booting up. On the right is a guided tour that asks you to <em>guess</em> what happens next, then explains why it happened.</p>
+          <p>The “operating system” here is hand-written from scratch: there is no Windows, macOS, or Linux underneath it. Every line it prints, someone wrote the code that makes it appear — and the tour walks you through that, one layer at a time.</p>
+        </div>
+      </details>
+      <details class="qa">
+        <summary>Is this a <em>real</em> operating system?</summary>
+        <div class="a">
+          <p>It’s a real <b>kernel</b> — the innermost, hardware-facing core of an OS — and it genuinely works: it boots itself, prints to the screen, catches errors, reads your keystrokes, and figures out how much memory the machine has. All from nothing.</p>
+          <p>It is <em>not yet</em> something you’d install and use, though. It can’t run programs, doesn’t have files, and has no windows or apps. Those are the later milestones on the roadmap above. Think “the engine and chassis, being built in the open,” not “a finished car.”</p>
+        </div>
+      </details>
+      <details class="qa">
+        <summary>Is it really running inside my browser?</summary>
+        <div class="a">
+          <p>Honest answer: what you see is a <b>faithful reconstruction</b> — every line on that green screen is exactly what the real kernel prints, replayed here. It is not a mock-up or marketing text; it’s the true output, character for character.</p>
+          <p>The genuinely-live 64-bit kernel runs under <b>QEMU</b> (a full PC emulator) on a real computer — see “Run the real thing yourself” above. The in-browser emulator this page uses, <b>v86</b>, only emulates a <em>32-bit</em> PC and can’t switch into the 64-bit mode our kernel needs, so it can’t run the real kernel yet. Rather than fake it, the page is upfront that this is a reconstruction.</p>
+        </div>
+      </details>
+      <details class="qa">
+        <summary>Why build an operating system from scratch at all?</summary>
+        <div class="a">
+          <p>To understand every layer instead of trusting it as magic. An OS isn’t one big mysterious thing — it’s a <em>stack of small, knowable mechanisms</em>, and each one is something a person can hand-write and reason about.</p>
+          <p>The goal of this project isn’t to ship a product; it’s understanding, with a public trail of how it was built — including the dead ends and the bugs. This page exists so that trail is something you can boot and poke at, not just read.</p>
+        </div>
+      </details>
+      <details class="qa">
+        <summary>Where do I go to learn more?</summary>
+        <div class="a">
+          <p>The plain-language explainers this glossary is drawn from — written for people who’ve never done kernel work — live in the repo:</p>
+          <p><a href="../docs/concepts/interrupts.md">interrupts.md</a> · <a href="../docs/concepts/keyboard-and-pic.md">keyboard-and-pic.md</a> · <a href="../docs/concepts/physical-memory.md">physical-memory.md</a> · <a href="../docs/blog">the build log</a></p>
+          <p>Every claim on this page also links straight to the real source code — look for the <code>↗</code> links in the tour and the line-by-line log above.</p>
+        </div>
+      </details>
+    </div>
+
+    <p class="gloss-head">The words, grouped by when they show up</p>
+    <div class="gloss-groups">
+      <details class="gloss">
+        <summary><span class="gi">01</span>The big picture</summary>
+        <dl class="gloss-dl">
+          <dt>Operating system</dt>
+          <dd>The software layer between the hardware and the programs you run. It shares out the processor, memory, and devices so each app doesn’t have to know the raw machine. Ziran OS is one being built from zero.</dd>
+          <dt>Kernel</dt>
+          <dd>The core of an operating system — the part that actually talks to the hardware and stays in control of the machine. Right now Ziran OS is almost <em>entirely</em> kernel.</dd>
+          <dt>Bare metal</dt>
+          <dd>Running directly on the (here, virtual) hardware with nothing underneath — no OS to borrow services from. Anything you’d normally ask an OS for, you build yourself.</dd>
+          <dt>Rust <span class="term-alt">/ no_std</span></dt>
+          <dd>Rust is the language the kernel is written in. <code>no_std</code> means “without the standard library” — that library assumes an OS is there to call, so a kernel opts out and uses only the bare language plus the machine. No garbage collector, no runtime, nothing beneath it.</dd>
+          <dt>Emulator <span class="term-alt">(v86)</span></dt>
+          <dd>A program that pretends to be a whole PC in software, so an OS can run inside an ordinary window or browser tab. <code>v86</code> is the specific one this page uses; it emulates a 32-bit PC. <code>QEMU</code>, used for the real kernel, emulates a full 64-bit one.</dd>
+        </dl>
+      </details>
+
+      <details class="gloss">
+        <summary><span class="gi">02</span>Turning the machine on</summary>
+        <dl class="gloss-dl">
+          <dt>BIOS</dt>
+          <dd>The tiny firmware baked into a PC that runs first at power-on, does basic setup, and then loads a bootloader. (In the browser these are the <code>seabios</code>/<code>vgabios</code> files.)</dd>
+          <dt>Bootloader <span class="term-alt">/ GRUB</span></dt>
+          <dd>The program that loads the kernel into memory and jumps into it. GRUB is a common one; it also surveys the machine beforehand and hands the kernel a map of the memory it found.</dd>
+          <dt>Multiboot</dt>
+          <dd>A shared agreement — a header format — between bootloaders and kernels, so any Multiboot-aware loader like GRUB can start the kernel and pass it standard information (like that memory map).</dd>
+          <dt>Protected mode / long mode <span class="term-alt">(32-bit vs 64-bit)</span></dt>
+          <dd>Modes the processor can run in. A PC powers on in a primitive 16/32-bit mode; <em>long mode</em> is modern 64-bit mode. Getting there is a deliberate ritual — check the CPU can do it, build the first memory tables, then flip the switch. The line <code>reached 64-bit long mode</code> is that ritual finishing.</dd>
+        </dl>
+      </details>
+
+      <details class="gloss">
+        <summary><span class="gi">03</span>Talking to the world</summary>
+        <dl class="gloss-dl">
+          <dt>VGA text buffer</dt>
+          <dd>A special block of memory (at address <code>0xb8000</code>) that literally <em>is</em> the text screen. Store a character byte and a colour byte there and the letter appears — no driver, no library. That’s the whole “graphics stack” at this stage.</dd>
+          <dt>Serial output</dt>
+          <dd>A simple, one-character-at-a-time output line (a virtual serial port) the kernel uses for detailed logs, kept separate from the visible screen. The verbose memory dump goes here; the screen gets the one-line headline.</dd>
+          <dt>Interrupt</dt>
+          <dd>A signal that makes the processor stop what it’s doing, handle an event, and (usually) resume as if nothing happened. It’s how a machine reacts to the outside world — a key, a timer — without constantly checking. The single most important idea in how an OS stays in control.</dd>
+          <dt>Exception</dt>
+          <dd>An interrupt the processor raises <em>against itself</em> because the current instruction went wrong — dividing by zero, touching memory that isn’t there. Same machinery as a hardware interrupt, but caused by the code.</dd>
+          <dt>IRQ</dt>
+          <dd>“Interrupt request” — a hardware interrupt raised by a <em>device</em>. It can arrive at any moment. The keyboard is <code>IRQ1</code>; the timer is IRQ0.</dd>
+          <dt>IDT <span class="term-alt">(interrupt descriptor table)</span></dt>
+          <dd>An array of 256 entries that maps each interrupt number to the function that handles it. When something interrupts the CPU, it looks up the number here and jumps. Without a valid entry, the fault escalates instead of being handled.</dd>
+          <dt>PIC <span class="term-alt">(programmable interrupt controller)</span></dt>
+          <dd>The chip that collects devices’ interrupt lines and hands them to the CPU one at a time. It has to be “remapped” at startup so its signals don’t collide with the CPU’s own exception numbers — and acknowledged after each one, or the keyboard goes silent after a single press.</dd>
+          <dt>Breakpoint <span class="term-alt">/ int3</span></dt>
+          <dd>A special, <em>recoverable</em> interrupt (number 3) that’s meant to be caught and resumed. The kernel fires <code>int3</code> on purpose: surviving it proves the entire interrupt path works end to end.</dd>
+          <dt>Scancode <span class="term-alt">/ PS/2 keyboard</span></dt>
+          <dd>The keyboard doesn’t send letters — it sends <em>scancodes</em>, small numbers identifying <em>physical keys</em>, which the kernel reads and translates into characters (with a lookup table, one per layout). Pressing a key and releasing it are two separate events.</dd>
+          <dt>Triple fault</dt>
+          <dd>What happens when a fault fires, the handler for it <em>also</em> faults, and that fault faults too. The processor gives up and resets the machine — a silent reboot with no message. Avoiding these is exactly why the IDT above matters; it’s the most disorienting thing in early OS work.</dd>
+        </dl>
+      </details>
+
+      <details class="gloss">
+        <summary><span class="gi">04</span>Managing memory</summary>
+        <dl class="gloss-dl">
+          <dt>Physical memory <span class="term-alt">/ RAM</span></dt>
+          <dd>The actual memory chips, named by physical address. Surprisingly, it’s a patchwork — some of it is real writable RAM, some is reserved by firmware, some is devices in disguise, and some is just gaps. The kernel starts out blind to how much it even has.</dd>
+          <dt>Frame <span class="term-alt">/ frame allocator</span></dt>
+          <dd>Usable RAM is chopped into fixed 4 KiB chunks called <em>frames</em>. The <em>frame allocator</em> is the bookkeeper that hands a free frame out, takes it back when done, and — the part that makes it real — can hand out that same frame again later. It’s the bottom stone of the memory stack.</dd>
+          <dt>Virtual memory <span class="term-alt">/ paging / page tables</span></dt>
+          <dd>A hardware trick where every address a program uses (a <em>virtual</em> address) is translated to a real physical one through lookup tables called <em>page tables</em>. It lets memory be protected, relocated, and handed out flexibly. This is the next milestone, built directly on frames.</dd>
+          <dt>TLB</dt>
+          <dd>A small cache inside the processor that remembers recent virtual→physical translations, so paging stays fast instead of walking the page tables on every single memory access.</dd>
+        </dl>
+      </details>
     </div>
   </section>
 
