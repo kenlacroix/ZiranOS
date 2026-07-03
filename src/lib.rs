@@ -25,6 +25,7 @@ mod frame_allocator;
 mod interrupts;
 mod keyboard;
 mod multiboot;
+mod paging;
 mod pic;
 mod port;
 mod serial;
@@ -109,6 +110,13 @@ pub extern "C" fn kernel_main(multiboot_info_addr: u64) -> ! {
         "[ok] physical memory: {} MiB free in the frame allocator",
         frame_allocator::free_frame_count() / 256
     );
+
+    // Milestone 7, step 1 (TEMPORARY): prove the page-table walk against the
+    // boot identity map before we build or switch to our own tables. Under the
+    // boot map [0, 1 GiB) is virtual==physical, and 1 GiB is unmapped.
+    serial_println!("[m7] translate(0xb8000)      = {:?}", paging::translate(0xb8000));
+    serial_println!("[m7] translate(0x100000)     = {:?}", paging::translate(0x100000));
+    serial_println!("[m7] translate(0x40000000)   = {:?}", paging::translate(0x4000_0000));
 
     // Milestone 4: install the interrupt handlers, then prove they work by
     // deliberately triggering a breakpoint. A working IDT catches the `int3`,
