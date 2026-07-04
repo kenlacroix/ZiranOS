@@ -13,12 +13,12 @@
 /web/*.bin
 # Staged for the browser tutorial by `make web` (reproducible; not committed)
 /web/ziran.iso
-# qemu-wasm live-boot assets (built by web/build-qemu-wasm.sh, ~46 MB — not committed)
+# qemu-wasm live-boot assets (built by web/build-qemu-wasm.sh, ~60 MB — not committed).
+# Emscripten keeps the qemu-system-x86_64.* names (baked into out.js); out.js/load.js
+# are the renamed glue + FS loader.
 /web/out.js
-/web/out.wasm
-/web/out.worker.js
-/web/out.data
 /web/load.js
+/web/qemu-system-x86_64.*
 /web/vendor/
 
 # Editor / OS noise

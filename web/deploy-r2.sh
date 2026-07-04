@@ -13,7 +13,8 @@ set -euo pipefail
 cd "$(dirname "$0")"                       # web/
 BUCKET="${R2_BUCKET:?set R2_BUCKET (e.g. R2_BUCKET=ziran-os-assets)}"
 PREFIX="${R2_PREFIX:-}"                     # optional key prefix, e.g. qemu/
-FILES=(out.js out.wasm out.worker.js out.data load.js)
+# Emscripten bakes the qemu-system-x86_64.* names into out.js, so keep them.
+FILES=(out.js qemu-system-x86_64.wasm qemu-system-x86_64.worker.js qemu-system-x86_64.data load.js)
 
 for f in "${FILES[@]}"; do
   [ -f "$f" ] || { echo "missing web/$f — run ./web/build-qemu-wasm.sh first"; exit 1; }
