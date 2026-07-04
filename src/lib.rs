@@ -26,6 +26,7 @@ extern crate alloc;
 use core::panic::PanicInfo;
 
 mod frame_allocator;
+mod fs;
 mod heap;
 mod interrupts;
 mod keyboard;
@@ -195,6 +196,11 @@ pub extern "C" fn kernel_main(multiboot_info_addr: u64) -> ! {
     // one, then spawn the shell as a task and yield into it. `kernel_main` becomes
     // the idle task (id 0): it falls into hlt_loop below, woken by each tick so
     // the scheduler can preempt back to the shell. See src/shell.rs.
+    // Milestone 11: stand up the read-only RAM-disk filesystem and prove it (mount,
+    // list, exact bytes, and four corrupt-image rejections) before the shell — which
+    // gains `ls`/`cat` — comes up. Pure heap-backed data, no interrupt state.
+    fs::self_test();
+
     shell::self_test();
     task::init();
     task::spawn(shell::shell_main);
