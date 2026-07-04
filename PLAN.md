@@ -208,6 +208,35 @@ lesson in what these mechanisms actually do.
 **Still not a goal:** making the OS *withstand* a determined attacker. We break
 it to learn where the edges are, then write down what we found.
 
+### 8a. Decision — hosting M16 as a *remote* CTF (network-service scope call)
+
+**Status: recorded, not yet exercised.** The M16 flag capture has two possible
+delivery tiers (see `docs/planning/ctf-eng-plan.md`):
+
+- **Tier 1 — in-browser, white-box.** The existing qemu-wasm live boot gains a
+  shell path to submit a crafted image and watch the loose extent check leak the
+  planted flag. Entirely local to the visitor's tab. **In scope, no decision
+  needed** — it is just M16 delivered publicly, and touches no non-goal.
+- **Tier 2 — remote capture.** A host-side instance where the flag lives only in
+  that process's RAM, reached by landing the exploit over the wire. This stands
+  up a **network service**, which brushes the §1 non-goal ("no networking beyond
+  the stretch stub").
+
+**Ruling:** Tier 2 is **permitted as challenge/delivery infrastructure**, on the
+same footing as the qemu-wasm hosting already accepted (`docs/DEPLOY.md`), *provided
+the network stays entirely host-side*:
+
+- The **kernel gains nothing networked** — no NIC, no stack, no networking
+  syscall. It speaks only over its existing COM1 serial console, exactly as under
+  `make console`, and is unaware it is being served remotely.
+- The network lives in a **host-side bridge** (serial ⇄ socket) and per-connection
+  ephemeral QEMU — never in ring 0.
+
+The §1 non-goal is about *the kernel not growing a network stack*; that line is
+**not** crossed. If Tier 2 ever tempts letting the kernel itself speak a wire
+protocol, stop — that is the actual boundary, and this decision does not authorize
+it. Build only after Tier 1 ships and the ops cost is judged worth it.
+
 ## 9. Blog / Narrative Notes
 
 - Employer-agnostic, people-agnostic — same rule as other blog content.
