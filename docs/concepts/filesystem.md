@@ -563,30 +563,332 @@ None of these corrupt memory — the pure-safe-Rust guarantee holds regardless.
 They are all *absence of features*, not *presence of bugs*, and each is the natural
 next thing a filesystem grows.
 
-## Where this goes next
+---
 
-The filesystem is the kernel's first *named, persistent-looking* structure — the
-first time a byte in memory has a name a human can type. That opens two directions
-the roadmap already names, plus the FAT16 detour above:
+# Milestone 12: a directory is the same lie, recursively
 
-- **Milestone 12 (the file manager)** builds on this to *navigate* — reading files,
-  and likely growing the flat namespace into real subdirectories. That is where the
-  "a directory is just a file whose bytes are more directory entries" recursion pays
-  off, and where a cached, persistent mount (behind a `Mutex` like `SCHED`) starts
-  to earn its keep over rebuild-per-command.
-- **Milestone 16 (fuzzing)** turns this milestone's five hand-written corrupt
-  images into a generated flood. The whole `mount` contract — *never panic on any
-  input, only ever return `Ok` or a specific `Err`* — is precisely what a fuzzer
-  checks, and the two deferred tightenings above (extent confinement, overlap
-  rejection) are exactly the kind of gap a fuzzer would find. The five rejections in
-  `self_test` are the seed; M16 is the harvest.
-- **A future FAT16 read post** cashes in the contrast: parse a format you didn't
-  design, from a real `mkfs.fat` image, and meet the cluster chain and the BPB in
-  the wild.
+*Companion to the M12 update of `src/fs.rs`. Everything above is ZranFS v1: one
+flat directory, no folders, no paths. M12 is the capstone — the file manager, the
+project's stated end goal ("list, navigate, and read files"). Read this after the
+v1 material above; it assumes the layout tables, the trust-boundary framing, and
+the writer/reader split, and extends all three by one idea.*
 
-That is the shape of this milestone: teaching the kernel that a *file* is not a
-thing but a *claim* — a header saying "the bytes over there are named this and go
-on for that long" — and that the whole craft of a filesystem is telling that claim
-consistently and refusing to tell it when the bytes don't back it up. **A file is a
-convincing lie about disk layout**, and `mount` is the part that decides, byte by
-checked byte, whether to believe it.
+## The thesis: so is a directory
+
+M11 landed on a single deflating sentence: **a file is a lie a header tells about a
+`&[u8]`.** A row `{name, offset, length}` points at a run of flat bytes and
+*claims* they are a file. Nothing about the bytes changed; something now says a
+story about them.
+
+M12 is that sentence applied to itself:
+
+> **So is a directory.** A directory is just a file whose bytes are *more*
+> `{name, offset, length}` entries. Point a row at a region and call that region a
+> table of rows, and you have a folder — not because those bytes are special, but
+> because something now claims they are a directory instead of a document. **The
+> same lie, told recursively.**
+
+That is the whole format delta and the whole conceptual move. A subdirectory is not
+a new kind of thing; it is the existing thing (a 32-byte entry) pointing at a region
+the reader agrees to parse as an array of the existing thing. The flat namespace
+becomes a tree the instant one entry is allowed to say "my bytes are entries too."
+
+## The format delta is exactly one field
+
+ZranFS v2 changes v1 in two places, and one of them is just a number.
+
+**The superblock is byte-identical** — only `version` now reads 2 (`VERSION: u16 =
+2`). A v1 image mounts as `UnsupportedVersion`; we keep only the current reader.
+
+**The directory entry changes one field.** M11 left a `u32` at `+0x1C` labeled
+`reserved` — kept, the v1 doc said, "for the FAT-BPB teaching contrast." M12 spends
+it:
+
+```text
+  +0x00   20    name          ASCII, NUL-padded (NAME_LEN = 20)      [unchanged]
+  +0x14    4    offset        byte offset to this node's region      [unchanged]
+  +0x18    4    length        region length in bytes                 [unchanged]
+  +0x1C    4    kind          0 = file, 1 = directory                [was `reserved`]
+```
+
+The constants that name it (`ENT_KIND: usize = 0x1C`, `KIND_FILE: u32 = 0`,
+`KIND_DIR: u32 = 1`) sit right beside v1's `ENT_OFFSET`/`ENT_LENGTH`. The rule the
+`kind` byte selects between:
+
+- A **FILE** entry's `[offset..offset+length)` is opaque file bytes — v1 behavior,
+  unchanged.
+- A **DIR** entry's `[offset..offset+length)` is an array of `length / DIRENT_LEN`
+  child entries — the same 32-byte rows, recursively. `length % 32` must be 0;
+  `length == 0` is a valid empty directory. The root table (at offset 16,
+  `file_count` entries) *is* the top-level directory.
+
+The boot image `boot_image()` builds is now a depth-2 tree:
+
+```text
+  /                            (root table, 4 entries)
+  ├─ motd.txt      FILE   "Hello, Ziran!"
+  ├─ readme        FILE   "Ziran OS -- a from-scratch x86_64 kernel.\n"
+  ├─ ziran.txt     FILE   the 自然 line (unchanged from v1)
+  └─ docs/         DIR ───┐  (points at the docs child table)
+                          ├─ filesystem.txt  FILE  "A file is a lie a header tells about bytes.\n"
+                          └─ shell.txt        FILE  "cd, pwd, ls, cat -- navigation over ZranFS v2.\n"
+
+  [hidden]  b"FLAG{ziran-boundary-leak}"   bytes in the image with NO entry naming them
+```
+
+The physical layout still lays down as one contiguous `Vec<u8>`, and the order is
+not arbitrary — it is what makes the tree *provably* valid (next section):
+
+```text
+  superblock          [0x00 .. 0x10)     16 bytes
+  root table          [0x10 .. 0x90)     4 entries × 32 = 128 bytes
+  docs child table    [0x90 .. 0xB0)     2 entries × 32 = 64 bytes  (starts at root_end)
+  file data           root files, then docs files, concatenated
+  hidden secret       b"FLAG{ziran-boundary-leak}"  — last, named by nothing
+```
+
+Notice the `docs/` child table begins *exactly* where the root table ends (`0x90 =
+16 + 4*32`). That is not a coincidence of packing; it is the invariant the writer
+is careful to satisfy so the reader's cheapest validation strategy works. Hold that
+thought — it is the centerpiece.
+
+## The hard part: validating a tree you don't trust — without looping OR blowing up
+
+Reading a good tree is easy: split the path on `/`, walk `DIR` entries down from the
+root, slice. The milestone's real work — and its honest, transferable lesson — is
+`mount` proving an **attacker-controlled** tree is safe to walk *before* anything
+walks it. A malformed image can make a `DIR` entry's `offset` point back at its own
+table, at an ancestor, or at the superblock: a cycle. A naive recursive validator
+follows that cycle forever, and `mount` hangs — the boot never completes.
+
+The tempting fix is a forward-ordering rule: a child table must start at/after its
+parent's end (`c_off >= p_end`). Along any root-to-leaf descent, region start
+offsets then strictly increase, and a strictly increasing sequence of integers all
+`< image.len()` is finite. So the recursion **terminates**. Clean proof. Ship it?
+
+No — and this is the whole lesson. **A termination proof is not a DoS-safety
+proof.** "Terminates," "runs in bounded time," and "uses bounded stack" are three
+*separate* guarantees, and the milestone learned the hard way that conflating them
+is exactly how a validator ships a denial-of-service. Take them one at a time.
+
+**1. Termination (bounded depth of *descent*).** The forward rule above gets you
+this and only this: descent offsets strictly increase, so no path is infinite, so
+`validate_dir` returns. Necessary. Nowhere near sufficient — "finite" says nothing
+about *how* finite.
+
+**2. Bounded work (no exponential blow-up).** Here is the trap the naive forward
+rule walks straight into. Nothing in `c_off >= p_end` says two *sibling* entries
+can't point at the **same** child region — a "diamond" DAG:
+
+```text
+      root
+     ┌─┴─┐
+     a   b          both a and b are DIR entries whose offset is the SAME table C
+     └─┬─┘
+       C            ... and C holds two DIRs pointing at the same table D ...
+      ┌┴┐
+      D D
+```
+
+Every descent still has strictly increasing offsets, so it *terminates* — but the
+validator re-validates C once per path that reaches it, D once per path that reaches
+*it*, and with `d` diamonds stacked the work is `2^d`. Terminates, yes; in
+astronomically unbounded *time*. `mount` would hang for a different reason than the
+cycle — not an infinite loop, an exponential one — and the boot still never
+finishes. **Finite is not fast.**
+
+The fix is to strengthen forward-ordering from *per-descent* to *global*: a
+monotone **high-water mark**. `validate_dir` threads a `&mut usize` high_water — the
+highest table-end seen anywhere so far — and every directory table must start at/
+after it (`off < *high_water` → `DirNotForward`), after which high_water advances
+past this table's end. That single monotone invariant makes *all* tables globally
+disjoint and strictly forward-ordered, so each is validated **exactly once**. A
+second entry pointing at an already-seen table — a cycle, a back-edge, or a diamond's
+shared child — now has `off < *high_water` and trips `DirNotForward` immediately.
+Total work drops from `2^depth` to `O(image.len() / 32)`: linear, one pass.
+
+**3. Bounded stack (no overflow).** Even a *valid* image can defeat both proofs
+above. Global forward-ordering bounds descent depth by `image.len() / 32` — which
+for a large image is tens of thousands of frames. `validate_dir` recurses once per
+level, and the shell task's stack is **16 KiB with no guard page** (see `task.rs`):
+a chain that deep silently walks the recursion off the end of the stack and corrupts
+whatever memory follows. No panic, no error — the guard page that would have caught
+it doesn't exist. This is the quietest failure of the three, and neither termination
+nor linear-time work says a word about it.
+
+The fix is blunt and separate: a `MAX_DEPTH = 32` cap, checked at the top of
+`validate_dir`, turning a too-deep chain into a clean `Err(TooDeep)`. Real ZranFS
+trees are 1–2 deep; 32 is enormous headroom and still tens of thousands short of the
+stack. It has to be its own mechanism precisely because it guards a resource
+(stack frames) that the offset arithmetic never touches.
+
+So `validate_dir` carries **three guards for three distinct claims**, and no two of
+them are the same claim:
+
+```rust
+fn validate_dir(image, off, len, high_water: &mut usize, depth) -> Result<(), FsError> {
+    if depth > MAX_DEPTH  { return Err(FsError::TooDeep); }       // bounded STACK
+    if off < *high_water  { return Err(FsError::DirNotForward); } // bounded WORK (global disjoint)
+    if len % DIRENT_LEN != 0 { return Err(FsError::BadDirLength); }
+    let end = off.checked_add(len).ok_or(FsError::EntryOutOfBounds)?;
+    if end > image.len()  { return Err(FsError::EntryOutOfBounds); }
+    *high_water = (*high_water).max(end);                          // this table is now consumed
+    for i in 0..(len / DIRENT_LEN) {
+        // ... check each child extent in-bounds ...
+        match kind {
+            KIND_FILE => {}                                        // in-bounds is enough
+            KIND_DIR  => validate_dir(image, c_off, c_len, high_water, depth + 1)?,
+            _         => return Err(FsError::BadKind),
+        }
+    }
+    Ok(())
+}
+```
+
+The honest lede, stated plainly because it is the genuinely valuable thing to carry
+out of this milestone: **a termination proof is not a DoS-safety proof.** When you
+convince yourself a loop over untrusted input "can't run forever," you have proven
+guarantee #1 and it is easy to believe you're done. You are not: #2 (does it run in
+*bounded time*?) and #3 (does it run in *bounded stack*?) are different questions
+with different answers, and a validator that stops at #1 ships a hang or a stack
+smash to the first adversary who reads the code. Three bounds, three mechanisms,
+three named errors — `DirNotForward`, `TooDeep`, and the in-bounds/`checked_add`
+pair — because they are three different promises.
+
+## Path resolution, split cleanly
+
+Navigation needs `.` and `..`, and the naïve place to put them is the disk walk.
+That would be a mistake: the flat format has **no parent pointers**. There is
+nothing in a child table that points back at its parent — `..` is meaningless as a
+disk operation. So M12 splits resolution into two halves that never touch each
+other's job:
+
+- **The shell owns a pure `canonicalize(cwd, arg) -> String`.** It joins `cwd` and
+  `arg`, drops `.` and empty components, and handles `..` as a `Vec::pop` — string
+  math, no disk. Popping past root is a no-op (`/` + `..` → `/`). The result is
+  always a canonical absolute path: leading `/`, no `.`/`..`, no trailing slash
+  except root itself. `..` is arithmetic on a path string, *never* a parent-pointer
+  walk the format couldn't support.
+- **The fs owns `resolve(abs: &str) -> Result<Node, FsError>`.** It takes an
+  *already-canonical absolute path* and splits on `/`, walking `DIR` entries down
+  from the root. Because the path is pre-canonicalized, `resolve` only ever
+  **descends** — no `.`/`..`, no `cwd`, no cycles to chase. `Node` is `File{offset,
+  length}` or `Dir{offset, length}`; descending through a `File` is `NotADirectory`,
+  a missing component is `NotFound`.
+
+The handoff is one clean line: **shell canonicalizes (string) → fs resolves (walk)
+→ slice.** On top of `resolve`, the fs exposes `list_dir(abs)` (resolve to a `Dir`,
+render its region as `DirEntry` rows with an `is_dir` bool) and `read_path(abs)`
+(resolve to a `File`, return the byte slice; `IsADirectory` if it's a folder).
+
+The shell grows `cd`, `pwd`, `ls`, and `cat`, threading a `cwd: String` that starts
+at `"/"`, and a prompt that shows it:
+
+```text
+  ziran:/> cd docs
+  ziran:/docs> ls
+    filesystem.txt       43 bytes
+    shell.txt            46 bytes
+  ziran:/docs> cat filesystem.txt
+  A file is a lie a header tells about bytes.
+  ziran:/docs> cat .
+  cat: is a directory
+  ziran:/docs> cd ..
+  ziran:/>
+```
+
+`cd` canonicalizes, confirms the target `is_dir` before mutating `cwd` (a failed
+`cd` never moves you), and `ls`/`cat` with no arg operate on `cwd`.
+
+## Verification honesty: mount a tree, then reject ten lies
+
+The v1 self-test proved reading a good flat image and rejecting five malformations.
+M12 keeps that discipline and extends it in exactly the two directions the new
+format opened: *navigation* and *the two new denial-of-service shapes*.
+
+The happy path now **navigates**: mount the tree, list `/`, confirm `docs/` is a
+directory, descend into it, and read `/docs/filesystem.txt` byte-for-byte against
+its literal. That last check is what proves the resolver *walked into a
+subdirectory and decoded its child table* — not that it round-tripped an object, and
+not that it accidentally read the right bytes from the root.
+
+The rejection set grows from five to **ten**, and the three new mount-time cases are
+precisely the three-bounds argument made executable:
+
+- a **cycle** (a `DIR` whose offset points back at the root table) → `DirNotForward`,
+  *without looping* — guarantee #1/#2;
+- a **deep chain** deeper than `MAX_DEPTH` → `TooDeep`, *without overflowing the
+  stack* — guarantee #3;
+- a **diamond DAG** (two sibling entries pointing at the same child table) →
+  `DirNotForward` on the second, proving each table is validated once, *without
+  exponential blow-up* — guarantee #2;
+
+plus `BadDirLength` (a dir length not a multiple of 32) and `BadKind` (a `kind`
+that's neither 0 nor 1), and the v1 five carried forward. The whole point of the
+cycle/deep/diamond trio is that a hang or a stack smash would **time out the boot**
+— so a self-test that *completes* is itself the proof the guards fired. The serial
+line says so out loud:
+
+```text
+[ok] fs: mounted a v2 tree (4 root entries incl. docs/), read /docs/filesystem.txt
+     byte-for-byte, secret unreachable, 10 corrupt images rejected (cycle, deep
+     chain, and diamond DAG among them -- no hang, no stack overflow)
+M11: filesystem online
+```
+
+That "no hang, no stack overflow" is not decoration — it is the milestone claiming
+all three bounds by name, and the fact that the line printed at all is the evidence.
+
+## The hidden secret: the boundary holds against navigation, not against everything
+
+`boot_image` plants one more thing in the image: the bytes
+`b"FLAG{ziran-boundary-leak}"`, written last, **with no directory entry pointing at
+them.** They are physically present in the `Vec<u8>` and completely unreachable by
+`ls`/`cat` — because navigation can only follow entries, and no entry names the
+secret. The self-test asserts this directly: `read_path("/FLAG")` and any other
+guess return `NotFound`. **The boundary holds: what has no name cannot be
+navigated to.**
+
+But be precise about *which* boundary holds, because the gap is deliberate and it is
+the point. `mount` checks that every file extent is *in-bounds*, but it does **not**
+confine a file's extent to the data region — a `FILE` entry may legally point its
+`offset`/`length` at the superblock, at another file's bytes, or at the secret. So
+while *navigation* can never reach the flag, a **crafted image** with a file entry
+whose extent overlaps the secret's bytes would read it right out. That is not an
+oversight; it is the planted **M16 exfil target** (PLAN §8): the secret is safe
+against navigation, and deliberately *not* safe against an arbitrary crafted image.
+M16's job is to be the adversary that builds that image; M12's job is to plant a
+real boundary worth attacking and to be honest about exactly how far it extends.
+
+# Where this goes next
+
+Reaching M12 **completes the core arc** — boot → memory → tasks → shell → files.
+The kernel can now list, navigate, and read files, which is the project's primary
+stated success criterion; from here on the roadmap is stretch and security. The
+filesystem gave the shell something to operate *on*, and the directory tree gave the
+user somewhere to *go*.
+
+- **Milestone 13 (userspace / syscalls)** introduces the first *privilege* boundary
+  — ring 3 code that can't touch the kernel's memory directly and must ask for
+  service through a syscall gate. Where the filesystem taught "refuse to believe a
+  malformed lie about bytes," the syscall boundary teaches "refuse to act on a
+  malformed request from a less-privileged caller" — the same trust-boundary
+  discipline, one ring up.
+- **The M15/M16 security track** turns this milestone's boundaries into targets.
+  M16 (fuzzing) turns the ten hand-written corrupt images into a generated flood
+  against the strengthened `mount` contract — *never panic, never hang, never
+  smash the stack; only `Ok` or a specific `Err`* — and its headline goal is to
+  **capture the planted flag**: craft the file entry whose extent overlaps
+  `FLAG{ziran-boundary-leak}` that `mount` currently permits. The unconfined file
+  extent is the gap by design; M16 is the exploit that proves it matters.
+- **A future FAT16 read post** still cashes in the v1 contrast: parse a format you
+  didn't design, from a real `mkfs.fat` image, and meet the cluster chain and the
+  BPB in the wild.
+
+That is the shape of the capstone: teaching the kernel that a *directory* is not a
+new thing but the *same claim, nested* — a header saying "the bytes over there are
+themselves headers" — and that the craft is walking that nesting consistently while
+refusing, in three distinct ways, to be hung, blown up, or crashed by a tree that
+lies about its own shape. **A directory is a convincing lie about disk layout, told
+recursively**, and `validate_dir` is the part that decides — in bounded depth,
+bounded work, and bounded stack — whether to believe it.

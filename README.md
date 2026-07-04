@@ -33,11 +33,15 @@ between tasks, so two tasks that never yield are still interleaved (a task is ju
 a saved stack pointer, switched by hand-written assembly) — and now runs an
 interactive **shell** as one of those tasks: the keyboard interrupt drops
 keystrokes into a lock-free ring, and the shell drains it to run `help`, `echo`,
-`clear`, `mem`, and `ps`. Most recently it grew a read-only **filesystem** — a
-minimal custom format on an in-kernel RAM disk, where a "file" is a header's lie
-about a flat run of bytes — so the shell can `ls` and `cat`. That covers
-milestones 1–11. Everything assembles, compiles, and links on stable Rust; CI
-boots the image under headless QEMU on every push.
+`clear`, `mem`, and `ps`. It grew a read-only **filesystem** — a minimal custom
+format on an in-kernel RAM disk, where a "file" is a header's lie about a flat run
+of bytes, and a *directory* is the same lie told recursively — so the shell is a
+**file manager** you navigate with `cd`, `pwd`, `ls`, and `cat`. That completes
+the core arc (boot → memory → tasks → shell → files) and covers milestones 1–12 —
+the project's primary goal, a working system that reaches a simple file manager.
+Everything assembles, compiles, and links on stable Rust; CI boots the image under
+headless QEMU on every push. **Drive it yourself:** `make console` puts the shell
+on your terminal over the serial line.
 
 New here? Start with the plain-language explainers in
 [`docs/concepts/`](docs/concepts/) — e.g. [interrupts](docs/concepts/interrupts.md),
@@ -60,7 +64,8 @@ serve `web/`).
 | M9 timer + preemptive scheduling | ✅ done |
 | M10 interactive shell | ✅ done |
 | M11 filesystem (read) — `ls`/`cat` | ✅ done |
-| M12 file manager (end goal) | ⬜ next |
+| M12 **file manager** (end goal) — `cd`/`pwd`/`ls`/`cat`, subdirectories | ✅ **done** |
+| M13+ userspace/syscalls, security track | ⬜ stretch |
 
 ## What happens when it boots
 
@@ -69,9 +74,9 @@ GRUB (Multiboot2)
   → boot/boot.asm            32-bit: verify CPU, build page tables, enter long mode
   → boot/long_mode_init.asm  64-bit: load segments, call into Rust
   → kernel_main (src/lib.rs) banner, then bring up memory, the heap, the timer,
-                             a scheduler, and a RAM-disk filesystem, then spawn a
-                             shell task and idle — a `ziran>` prompt you can type
-                             at (`help`, `ps`, `mem`, `ls`, `cat`)
+                             a scheduler, and a RAM-disk filesystem tree, then
+                             spawn a shell task and idle — a `ziran:/>` prompt you
+                             navigate (`help`, `ps`, `mem`, `cd`, `pwd`, `ls`, `cat`)
 ```
 
 Every step is readable and hand-written; there is no `bootimage`/`build.rs`
@@ -127,6 +132,7 @@ make               # assemble + compile + link  -> build/kernel.bin
 make check-header  # sanity-check the Multiboot2 magic
 make iso           # build a bootable ISO         -> build/ziran.iso
 make run           # boot it in a QEMU window
+make console       # boot with the shell on THIS terminal (serial) — type at ziran:/>
 make run-headless  # boot with no window; pass iff the long-mode marker appears
 ```
 
