@@ -63,6 +63,45 @@ Design principles for the teaching tool:
 - **Dual-mode so it never breaks.** Live v86 when the assets are reachable; a
   faithful simulated replay of the same boot otherwise.
 
+### 3b. Teaching-tool roadmap — from watching to acting
+
+The tool is most useful when the reader *does the thinking and then acts on the
+real machine* — predicting, running, and especially **breaking** it — rather than
+reading a narrated replay. Captured ideas, tagged by what unblocks them; pull the
+relevant ones into each milestone's checklist as it fits.
+
+**Now (no new kernel features needed):**
+- **"Break it" experiments.** Per step, a predict → reveal of a *deliberately
+  broken* variant: a `switch_context` missing a callee-saved `pop`; a timer
+  handler that skips the EOI → one tick, then silence. Seeing the triple-fault or
+  hang that a concept doc only *describes* is the single most instructive thing a
+  live emulator can do that a blog cannot — and it doubles as the security track's
+  "observe the failure mode" habit. *(Prototyped for M9: the missing-EOI hang.)*
+- **Register/state peeks.** Show the concrete value behind an abstraction — e.g.
+  `rsp = 0x40008ff0`, 16-aligned, at the M9 context switch.
+- **Inline source.** Embed the specific lines under discussion (with the `SAFETY`
+  comment visible), closing the "every claim links to real code" loop without
+  making the reader leave the page.
+
+**M10+ (needs the shell):**
+- **Type into the live machine.** Once the shell lands, let the reader run `help`,
+  `mem`, `ps` in the v86 console; the step becomes "predict what `ps` shows, then
+  run it." The M9 payoff specifically: a `ps`-style view of the two tasks plus a
+  live tick counter makes preemption *visible* rather than asserted in a log.
+
+**Ongoing (durability as it grows toward 16 milestones):**
+- Per-milestone deep links + a "you are here" spine tied to the `ROAD` array, so a
+  reader arriving from a blog post lands on the right step.
+- Guard the dual-mode fallback: keep the simulated replay byte-faithful to the
+  real boot each milestone, so it does not silently rot.
+- Surface each milestone's "what broke" thread in the tour — the honest,
+  differentiated content the project values.
+
+**Non-goal reminder:** none of this needs networking. The security/red-team track
+(§8) attacks *local* boundaries only; a "pentest" angle in the tool means letting
+the reader break the kernel's own invariants (ring-3 escape, syscall/FS abuse from
+M13 / M11–12), never reach the network.
+
 ## 4. Core Technical Decisions
 
 - **Language:** Rust, `no_std`, targeting `x86_64-unknown-none` (the Tier-2 stable bare-metal target; a custom target JSON is an option later if a milestone needs `build-std`).

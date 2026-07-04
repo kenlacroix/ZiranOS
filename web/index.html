@@ -11,6 +11,7 @@
     --paper:#e9ece9; --surface:#f6f7f5; --surface-2:#eef1ee;
     --ink:#0f1618; --ink-soft:#53605e; --line:#d3d9d5;
     --accent:#9a5a0e; --accent-2:#b9791f; --accent-ghost:#9a5a0e1a;
+    --danger:#c0392b;
     --machine:#050f0b; --machine-edge:#0c1b14; --screen:#02070a;
     --phosphor:#57e08a; --phosphor-dim:#2f7a52; --led-on:#7ff0a6; --led-warn:#f0b24a;
     --shadow:0 1px 2px #0f16180f, 0 8px 30px #0f161814;
@@ -23,6 +24,7 @@
       --paper:#0b1012; --surface:#111a1c; --surface-2:#0e1618;
       --ink:#e7ece9; --ink-soft:#93a09c; --line:#212c2e;
       --accent:#e6a24c; --accent-2:#f2b866; --accent-ghost:#e6a24c1f;
+    --danger:#e06c5e;
       --machine:#040d09; --machine-edge:#0a1610; --screen:#01060a;
       --shadow:0 1px 2px #0000004d, 0 10px 34px #00000059;
     }
@@ -31,6 +33,7 @@
     --paper:#e9ece9; --surface:#f6f7f5; --surface-2:#eef1ee;
     --ink:#0f1618; --ink-soft:#53605e; --line:#d3d9d5;
     --accent:#9a5a0e; --accent-2:#b9791f; --accent-ghost:#9a5a0e1a;
+    --danger:#c0392b;
     --machine:#050f0b; --machine-edge:#0c1b14; --screen:#02070a;
     --shadow:0 1px 2px #0f16180f, 0 8px 30px #0f161814;
   }
@@ -38,6 +41,7 @@
     --paper:#0b1012; --surface:#111a1c; --surface-2:#0e1618;
     --ink:#e7ece9; --ink-soft:#93a09c; --line:#212c2e;
     --accent:#e6a24c; --accent-2:#f2b866; --accent-ghost:#e6a24c1f;
+    --danger:#e06c5e;
     --machine:#040d09; --machine-edge:#0a1610; --screen:#01060a;
     --shadow:0 1px 2px #0000004d, 0 10px 34px #00000059;
   }
@@ -227,6 +231,24 @@
   details.qa .a p:last-child{margin:0}
   details.qa .a a{font-family:var(--font-mono);font-size:13px}
   details.qa .a code{font-family:var(--font-mono);font-size:.9em;background:var(--surface-2);padding:1px 5px;border-radius:5px;color:var(--accent)}
+  /* ---- "break it" experiment inside a step's explain (PLAN §3b: let the reader
+     see the failure mode a concept doc only describes). Same disclosure grammar,
+     a danger accent, and a mono block for the broken boot output. ---- */
+  details.breakit{margin:16px 0 0;border:1px solid var(--line);border-left:3px solid var(--danger);
+    border-radius:10px;background:var(--surface);overflow:hidden}
+  details.breakit>summary{cursor:pointer;list-style:none;display:flex;gap:10px;align-items:center;
+    padding:12px 15px;font-weight:600;font-size:14.5px;text-wrap:balance}
+  details.breakit>summary::-webkit-details-marker{display:none}
+  details.breakit>summary::before{content:"✕";font-family:var(--font-mono);width:20px;height:20px;flex:none;
+    display:grid;place-items:center;border-radius:6px;background:var(--danger);color:#fff;font-weight:700;font-size:12px}
+  details.breakit[open]>summary{color:var(--danger);border-bottom:1px solid var(--line)}
+  details.breakit .bd{padding:13px 15px;font-size:14px;color:var(--ink-soft);line-height:1.6}
+  details.breakit .bd p{margin:0 0 10px}
+  details.breakit .bd p:last-child{margin:0}
+  details.breakit .bd code{font-family:var(--font-mono);font-size:.9em;background:var(--surface-2);padding:1px 5px;border-radius:5px;color:var(--accent)}
+  details.breakit pre{font-family:var(--font-mono);font-size:12.5px;line-height:1.5;background:var(--surface-2);
+    border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin:0 0 12px;overflow-x:auto;white-space:pre-wrap}
+  details.breakit pre .dead{color:var(--danger);font-style:italic}
   .gloss-head{font-family:var(--font-mono);font-size:12px;letter-spacing:.12em;text-transform:uppercase;
     color:var(--ink-soft);margin:0 0 12px;font-weight:600}
   .gloss-groups{display:flex;flex-direction:column;gap:10px}
@@ -598,7 +620,8 @@ make debug      # boot frozen, attach GDB</code>
      watch:"The “[ok] scheduler: two tasks share the CPU, switched by a 100 Hz timer” line.",
      q:"The CPU has one core and runs one instruction at a time. So how can it appear to run two tasks “at once” — and what has to be saved when it switches from one to the other?",
      a:"It doesn’t truly run them together. It runs one for a slice, then swaps to the other and back, fast enough to look simultaneous. The saved state is the whole trick: a task is just a saved stack pointer, so switching means storing the outgoing task’s stack pointer and its six callee-saved registers, loading the incoming task’s, and returning — which resumes exactly where that task last stopped. And the switch can be forced by a timer interrupt, so a task doesn’t even have to cooperate to be switched away from.",
-     ex:"<p>There are two halves to this. First the <em>cooperative</em> version: each task runs until it voluntarily calls <code>yield_now</code>, which hands the CPU to the next one. Two workers taking turns produce a clean <code>ABABAB…</code> — proof they interleave, and that each one’s registers and heap values survive the switch untouched. But cooperation is fragile: a single task that never yields would freeze everything.</p><p>So the second half is <em>preemptive</em>: a Programmable Interval Timer (the PIT) is set to fire 100 times a second, and each tick’s interrupt runs the very same <code>switch_context</code> the task would have called itself. Now a task is interleaved whether it cooperates or not. The honest proof is a task that spins in an infinite loop with <em>no</em> yield at all — it still makes progress, and another task still runs, <em>only</em> because the timer keeps forcibly taking the CPU away from it. That single fact — progress without cooperation — is the difference between a scheduler and a polite convention.</p>",
+     ex:"<p>There are two halves to this. First the <em>cooperative</em> version: each task runs until it voluntarily calls <code>yield_now</code>, which hands the CPU to the next one. Two workers taking turns produce a clean <code>ABABAB…</code> — proof they interleave, and that each one’s registers and heap values survive the switch untouched. But cooperation is fragile: a single task that never yields would freeze everything.</p><p>So the second half is <em>preemptive</em>: a Programmable Interval Timer (the PIT) is set to fire 100 times a second, and each tick’s interrupt runs the very same <code>switch_context</code> the task would have called itself. Now a task is interleaved whether it cooperates or not. The honest proof is a task that spins in an infinite loop with <em>no</em> yield at all — it still makes progress, and another task still runs, <em>only</em> because the timer keeps forcibly taking the CPU away from it. That single fact — progress without cooperation — is the difference between a scheduler and a polite convention.</p><details class='breakit'><summary>Break it: what if the timer handler forgets the EOI?</summary><div class='bd'><p>The <em>EOI</em> (end-of-interrupt) is the one line that tells the PIC “this tick is handled — send me the next one.” Comment out <code>pic::send_eoi(0)</code> in the timer handler, rebuild, and boot. Predict what changes before you open this.</p><pre>with the EOI:     preemption works … (<b>91</b> ticks elapsed)
+without the EOI:  preemption works … (<span class='dead'><b>1</b> tick elapsed — the clock died</span>)</pre><p>Without the acknowledgement, the PIC keeps IRQ0’s “in-service” bit set, waiting forever for a signal that never comes — so it delivers <em>exactly one</em> timer interrupt, then goes silent. This little self-test still limps to a pass, because its second task only needed a single nudge to finish — but the tick counter frozen at <code>1</code> is the tell. A workload that needs the timer to <em>keep</em> interrupting — two tasks in genuinely endless loops — freezes right after that first tick: no crash, no message, just a hang. It is the most common first-timer bug, and it is why the real handler sends the EOI <em>before</em> it switches tasks (<code>src/interrupts.rs</code>).</p></div></details>",
      links:[["src/task.rs","task.rs"],["src/pit.rs","pit.rs"],["boot/switch.asm","switch.asm"],["docs/concepts/timer-and-scheduling.md","timer-and-scheduling.md (explainer)"]]},
     {n:"10", ms:"what’s next", title:"You’ve reached the current edge",
      watch:"This is as far as the OS is built — milestone 9 of 12.",
