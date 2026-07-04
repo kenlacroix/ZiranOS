@@ -39,6 +39,7 @@ mod port;
 mod serial;
 mod shell;
 mod task;
+mod usermode;
 mod vga_buffer;
 
 // Bounds of the loaded kernel image, defined by `linker.ld`. These are *symbols*,
@@ -223,6 +224,14 @@ pub extern "C" fn kernel_main(multiboot_info_addr: u64) -> ! {
     fs::self_test();
 
     shell::self_test();
+
+    // Milestone 13 (step 4): the milestone payload. Run one program in ring 3,
+    // have it print 'Z' via the `int 0x80` syscall gate from CPL 3, and return to
+    // the kernel. This is the first time code runs that the *hardware* holds back.
+    // Runs inline here (not as a scheduled task — folding ring 3 into the preemptive
+    // scheduler is a deferred M13 cut) and guards itself against the timer.
+    usermode::self_test();
+
     task::init();
     task::spawn(shell::shell_main);
     task::yield_now();

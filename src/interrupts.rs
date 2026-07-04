@@ -337,11 +337,12 @@ fn syscall(ctx: &mut InterruptContext) {
             ctx.rax = 0; // success
         }
         SYS_EXIT => {
-            // The user excursion is finished. The minimal cut only reports it here;
-            // actually *unwinding* to ring 0 (rather than iretq-ing back to the
-            // blob) is wired with the launch in the next step.
+            // The user excursion is finished. Hand back to the kernel: rewrite this
+            // interrupt's saved frame so the ISR's iretq returns to ring 0 (see
+            // `usermode::resume_kernel`) rather than back to the ring-3 blob. This
+            // does not return here — the frame now points at the kernel.
             serial_println!("[m13] syscall: SYS_EXIT (CS={:#x}, CPL={})", ctx.cs, cpl);
-            ctx.rax = 0;
+            crate::usermode::resume_kernel(ctx);
         }
         _ => {
             serial_println!("[m13] syscall: unknown number {} (CPL={})", number, cpl);
