@@ -15,6 +15,10 @@
 # Output (into web/, all gitignored): out.js, out.wasm, out.worker.js, out.data,
 # load.js, and vendor/ (xterm + xterm-pty). Then:  make serve  and open the page.
 set -euo pipefail
+# The QEMU/emsdk Dockerfiles use BuildKit features (RUN <<EOF heredocs, COPY --link,
+# --progress). Force BuildKit on — some docker.io installs still default to the
+# legacy builder even with buildx present.
+export DOCKER_BUILDKIT=1
 cd "$(dirname "$0")/.."           # repo root
 ROOT="$PWD"
 WORK="${QEMU_WASM_WORK:-$ROOT/build/qemu-wasm}"
@@ -50,13 +54,13 @@ sed -i.bak 's#https://zlib.net/zlib-$ZLIB_VERSION.tar.xz#https://github.com/madl
 # 2. The Emscripten cross-compile base image (emsdk + GLib/zlib/libffi/Pixman).
 #    This Dockerfile ships inside the QEMU repo. THIS STEP IS THE LONG ONE.
 echo "==> building build-qemu-base (Emscripten + cross-compiled deps) — slow"
-docker build --progress=plain -t build-qemu-base - \
+docker buildx build --load --progress=plain -t build-qemu-base - \
   < "$QEMU_REPO/tests/docker/dockerfiles/emsdk-wasm32-cross.docker"
 
 # 3. A minimal final image on top of the base: just add xterm-pty (the sample's
 #    Dockerfile also builds a Linux guest we don't need, so we skip that).
 echo "==> building build-qemu (adds xterm-pty)"
-docker build --progress=plain -t build-qemu - <<'DOCKER'
+docker buildx build --load --progress=plain -t build-qemu - <<'DOCKER'
 FROM build-qemu-base
 WORKDIR /builddeps/
 ENV EMCC_CFLAGS="--js-library=/builddeps/node_modules/xterm-pty/emscripten-pty.js"
