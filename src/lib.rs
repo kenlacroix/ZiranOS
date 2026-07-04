@@ -19,9 +19,14 @@
 #![no_std]
 // `core::fmt` machinery is all we need for formatted output.
 
+// Milestone 8: opt into the `alloc` crate (Vec, Box, String). `#![no_std]` does
+// not pull it in; the `#[global_allocator]` that backs it lives in `heap`.
+extern crate alloc;
+
 use core::panic::PanicInfo;
 
 mod frame_allocator;
+mod heap;
 mod interrupts;
 mod keyboard;
 mod multiboot;
@@ -132,6 +137,13 @@ pub extern "C" fn kernel_main(multiboot_info_addr: u64) -> ! {
     paging::init();
     paging::self_test();
     println!("[ok] paging: switched to kernel-built page tables");
+
+    // Milestone 8: stand up the kernel heap on the new page tables, then prove
+    // Vec/Box/String work. Depends on both the frame allocator (M6) and paging
+    // (M7); runs while interrupts are still masked.
+    heap::init();
+    heap::self_test();
+    println!("[ok] heap: dynamic allocation (Vec, Box, String) now works");
 
     // Milestone 5: bring up the keyboard. Remap + mask the PIC first, THEN
     // enable hardware interrupts — doing it in the other order could let a stray

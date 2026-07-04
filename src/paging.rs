@@ -50,8 +50,10 @@ const ADDR_MASK: u64 = 0x000F_FFFF_FFFF_F000;
 // Page-table entry flag bits (low 12 bits of an entry).
 /// Present: the entry is valid; touching a not-present entry raises a #PF.
 const PRESENT: u64 = 1 << 0;
-/// Writable: 0 = read-only, 1 = writable for the region under this entry.
-const WRITABLE: u64 = 1 << 1;
+/// Writable: 0 = read-only, 1 = writable for the region under this entry. Public
+/// so callers of [`map_page`] (e.g. the M8 heap mapping writable pages) can name
+/// the flag; `map_page` OR-s in `PRESENT` itself.
+pub const WRITABLE: u64 = 1 << 1;
 /// Page Size: at the PD level, this entry maps a 2 MiB page directly instead of
 /// pointing at a page table. (The boot code identity-maps 1 GiB with these.)
 const HUGE: u64 = 1 << 7;
