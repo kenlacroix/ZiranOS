@@ -90,6 +90,63 @@ impl Line {
     }
 }
 
+/// A parsed command line: the verb, plus the argument tail where relevant. Kept
+/// as a pure parse result (borrowing the input line) so command *recognition* is
+/// testable without running any I/O.
+#[derive(PartialEq, Eq, Debug)]
+enum Command<'a> {
+    Empty,
+    Help,
+    Echo(&'a str),
+    Clear,
+    Mem,
+    Ps,
+    Unknown(&'a str),
+}
+
+/// Split a line into a command and its argument tail. The first whitespace-run
+/// separates the verb from the rest; the rest is preserved verbatim (only its
+/// leading space trimmed), so `echo` reprints spacing faithfully.
+fn parse(line: &str) -> Command<'_> {
+    let line = line.trim();
+    if line.is_empty() {
+        return Command::Empty;
+    }
+    let (verb, rest) = match line.split_once(char::is_whitespace) {
+        Some((v, r)) => (v, r.trim_start()),
+        None => (line, ""),
+    };
+    match verb {
+        "help" => Command::Help,
+        "echo" => Command::Echo(rest),
+        "clear" => Command::Clear,
+        "mem" => Command::Mem,
+        "ps" => Command::Ps,
+        other => Command::Unknown(other),
+    }
+}
+
+/// Run a completed line. Output goes to the VGA console (the human's screen).
+fn dispatch(line: &str) {
+    match parse(line) {
+        Command::Empty => {}
+        Command::Help => {
+            println!("commands:");
+            println!("  help          show this list");
+            println!("  echo <text>   print <text>");
+            println!("  clear         clear the screen");
+            println!("  mem           show memory usage");
+            println!("  ps            list tasks");
+        }
+        Command::Echo(rest) => println!("{rest}"),
+        Command::Clear => crate::vga_buffer::clear_screen(),
+        // mem/ps read live kernel state; wired up in step 3.
+        Command::Mem => println!("(mem: coming in the next step)"),
+        Command::Ps => println!("(ps: coming in the next step)"),
+        Command::Unknown(verb) => println!("unknown command: {verb} (try help)"),
+    }
+}
+
 /// The shell task entry point. Spawned onto the scheduler by `kernel_main`; runs
 /// forever (never returns). `extern "C"` to match `task::Task::new`'s signature.
 pub extern "C" fn shell_main() {
@@ -111,7 +168,7 @@ pub extern "C" fn shell_main() {
                 Edit::Erase => print!("\u{8}"), // the VGA writer moves back and blanks the cell
                 Edit::Submit => {
                     println!();
-                    // (command dispatch on `line.as_str()` lands here in step 2)
+                    dispatch(line.as_str());
                     line.clear();
                     print!("{PROMPT}");
                 }
@@ -152,5 +209,30 @@ pub fn self_test() {
     line.clear();
     assert_eq!(line.len, 0);
 
-    serial_println!("[ok] shell: line editing (echo, backspace, submit) verified");
+    // Command parsing: each verb classifies correctly, the echo tail is preserved
+    // verbatim, and an unknown verb is reported (not silently swallowed).
+    assert_eq!(parse(""), Command::Empty);
+    assert_eq!(parse("   "), Command::Empty);
+    assert_eq!(parse("help"), Command::Help);
+    assert_eq!(parse("clear"), Command::Clear);
+    assert_eq!(parse("mem"), Command::Mem);
+    assert_eq!(parse("ps"), Command::Ps);
+    assert_eq!(parse("echo hello  world"), Command::Echo("hello  world"));
+    assert_eq!(parse("echo"), Command::Echo(""));
+    assert_eq!(parse("bogus xyz"), Command::Unknown("bogus"));
+
+    // The input ring (the milestone's crux) round-trips FIFO. Guard with
+    // interrupts off so the real keyboard IRQ — the only other producer — cannot
+    // push concurrently and break the single-producer contract during the test.
+    // Nothing has been typed yet, so the ring starts empty.
+    let flags = interrupts::save_and_disable();
+    assert_eq!(keyboard::pop(), None, "shell: input ring not empty at boot");
+    keyboard::push(b'x');
+    keyboard::push(b'y');
+    assert_eq!(keyboard::pop(), Some(b'x'), "shell: input ring not FIFO");
+    assert_eq!(keyboard::pop(), Some(b'y'));
+    assert_eq!(keyboard::pop(), None, "shell: input ring should be drained");
+    interrupts::restore(flags);
+
+    serial_println!("[ok] shell: line editing, command parsing, and input ring verified");
 }
