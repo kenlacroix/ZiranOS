@@ -304,6 +304,26 @@
   .evidence .ev.v{color:#3f9e6b}
   .evidence .ev.c{color:var(--accent)}
 
+  /* ---- ELI5: an opt-in plain-language lens over the tour ---- */
+  .tour-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:2px}
+  .tour-head h2{margin:0}
+  .eli5-toggle{font-family:var(--font-mono);font-size:12px;font-weight:600;cursor:pointer;
+    display:inline-flex;align-items:center;gap:8px;padding:6px 12px;border-radius:999px;
+    border:1px solid var(--line);background:var(--surface);color:var(--ink-soft);line-height:1}
+  .eli5-toggle:hover{border-color:var(--accent-2)}
+  .eli5-toggle .e5-pip{width:26px;height:15px;border-radius:999px;background:var(--line);position:relative;
+    flex:none;transition:background .15s}
+  .eli5-toggle .e5-pip::after{content:"";position:absolute;top:2px;left:2px;width:11px;height:11px;
+    border-radius:50%;background:var(--surface);box-shadow:0 1px 2px #00000040;transition:transform .15s}
+  .eli5-toggle[aria-checked="true"]{border-color:var(--accent);color:var(--accent);background:var(--accent-ghost)}
+  .eli5-toggle[aria-checked="true"] .e5-pip{background:var(--accent)}
+  .eli5-toggle[aria-checked="true"] .e5-pip::after{transform:translateX(11px);background:#fff}
+  .eli5{margin:2px 0 18px;padding:13px 16px;border-left:4px solid var(--accent-2);
+    background:var(--accent-ghost);border-radius:0 10px 10px 0;font-size:15px;line-height:1.55;color:var(--ink)}
+  .eli5 .e5-badge{display:inline-flex;align-items:center;gap:7px;font-family:var(--font-mono);
+    font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);margin-bottom:5px}
+  .eli5 p{margin:0}
+
   footer{border-top:1px solid var(--line);padding:30px 0 50px;color:var(--ink-soft);font-size:13px}
   footer .mono{color:var(--ink)}
   @media (prefers-reduced-motion:reduce){.screen .cur{animation:none}}
@@ -393,7 +413,13 @@
 
     <!-- GUIDED TOUR -->
     <div class="tour">
-      <h2>Guided tour</h2>
+      <div class="tour-head">
+        <h2>Guided tour</h2>
+        <button class="eli5-toggle" id="eli5toggle" type="button" role="switch" aria-checked="false" aria-label="Explain like I’m 5 — plain-language mode">
+          <span class="e5-pip" aria-hidden="true"></span>
+          <span>🧸 Explain like I’m 5</span>
+        </button>
+      </div>
       <div class="progress" id="progress"></div>
       <div class="card" id="card"></div>
       <div class="nav">
@@ -643,6 +669,7 @@ make debug      # boot frozen, attach GDB</code>
   // ---- the guided tour (predict -> observe -> explain) ----
   var STEPS = [
     {n:"01", ms:"Milestones 0–2 · boot", title:"There is nothing under this",
+     eli5:"A computer wakes up knowing almost nothing — like someone with amnesia who can only read a tiny note taped to the door. That note is the boot code, and it walks the machine, step by step, through becoming a real 64-bit computer.",
      watch:"The screen fills with a banner and “reached 64-bit long mode.”",
      q:"What operating system is running underneath this one?",
      a:"None. There’s no Linux, no host OS inside the emulated machine — just this kernel on the bare (virtual) processor. v86 emulates a PC; the very first instruction it runs is our own boot code.",
@@ -651,6 +678,7 @@ make debug      # boot frozen, attach GDB</code>
      proof:"the kernel executes at all past the long-mode switch — a mis-built page table there would have triple-faulted and silently rebooted instead of printing this.",
      links:[["boot/boot.asm","boot.asm"],["boot/long_mode_init.asm","long_mode_init.asm"]]},
     {n:"02", ms:"Milestone 3 · output", title:"How it talks with no OS to ask",
+     eli5:"There is no “print” button hiding anywhere — the screen is really just a special patch of memory, and dropping a letter into the right spot in that patch makes the letter appear. Talking to the screen turns out to be nothing fancier than leaving a note in exactly the right place.",
      watch:"The three green “[ok]” lines.",
      q:"With no operating system and no driver, how does a character appear on screen at all?",
      a:"By writing bytes to a fixed memory address. In VGA text mode, memory address 0xb8000 IS the screen — store a character byte and a color byte there, and the glyph appears. That’s the entire “graphics stack.”",
@@ -659,6 +687,7 @@ make debug      # boot frozen, attach GDB</code>
      proof:"the three [ok] lines appear at all — each glyph is a byte written to 0xb8000, so the text on this screen is that path working.",
      links:[["src/vga_buffer.rs","vga_buffer.rs"]]},
     {n:"03", ms:"encoding", title:"The characters that couldn’t",
+     eli5:"The screen owns a fixed little box of rubber stamps — mostly the English alphabet and some symbols, and nothing else. When the kernel asks for the Chinese characters 自然, there simply is no stamp for them, so it presses a blank placeholder box instead. You are watching the alphabet run out.",
      watch:"The first line: “Ziran OS  --  ■■”.",
      q:"The source asks for 自然. Why do you see two boxes instead?",
      a:"Because the VGA font is a fixed ROM of 256 glyphs — basically ASCII plus some symbols. It has no glyph for 自 or 然, so the writer substitutes byte 0xFE (■) for any non-ASCII character rather than draw garbage.",
@@ -667,6 +696,7 @@ make debug      # boot frozen, attach GDB</code>
      proof:"the two ■ boxes are byte 0xFE substituted for 自然 — the character-encoding boundary made visible on screen, not hidden.",
      links:[["src/vga_buffer.rs","vga_buffer.rs"]]},
     {n:"04", ms:"Milestone 4 · interrupts", title:"Failing on purpose",
+     eli5:"Normally a computer that trips over a problem it wasn’t ready for just panics and reboots — so fast you never see why. Here the kernel first sets up a catcher’s mitt, then throws itself a ball on purpose; catching it cleanly proves the safety net actually works before a real error ever shows up.",
      watch:"“triggering a test breakpoint” → “[trap] breakpoint (#BP) … handled.”",
      q:"What normally happens when a kernel hits an error it has no handler for?",
      a:"It escalates: fault → double fault → triple fault → the machine resets, with no message. That silent reboot is the most disorienting thing in early OS work. Here, the breakpoint is caught and execution continues.",
@@ -675,6 +705,7 @@ make debug      # boot frozen, attach GDB</code>
      proof:"int3 is caught and execution resumes — [trap] breakpoint (#BP) … handled — proving the IDT, the assembly entry stubs, and the return path end to end.",
      links:[["src/interrupts.rs","interrupts.rs"],["docs/concepts/interrupts.md","interrupts.md (explainer)"]]},
     {n:"05", ms:"Milestone 5 · keyboard", title:"It listens now — try it",
+     eli5:"Instead of the computer constantly asking “did you press a key? did you press a key?”, it dozes off and lets each keystroke ring a little doorbell that wakes it just long enough to read the key and echo it — then it goes back to sleep. A doorbell, not someone staring at the door.",
      watch:"“keyboard is live — type something.” Click the screen and type.",
      q:"Is the CPU sitting in a loop asking “any key yet?” — or is it doing something else?",
      a:"Neither loop nor poll. The CPU is halted — genuinely asleep. Pressing a key raises a hardware interrupt (IRQ1) that wakes it just long enough to read the key and echo it, then it halts again. That’s how a real OS idles at near-zero power.",
@@ -683,6 +714,7 @@ make debug      # boot frozen, attach GDB</code>
      proof:"each key you press echoes — IRQ1 wakes the halted CPU, the handler reads port 0x60 and acknowledges the PIC; forget that ack and the keyboard dies after exactly one press.",
      links:[["src/keyboard.rs","keyboard.rs"],["src/pic.rs","pic.rs"],["docs/concepts/keyboard-and-pic.md","keyboard-and-pic.md (explainer)"]]},
     {n:"06", ms:"Milestone 6 · memory", title:"Learning what it has",
+     eli5:"The machine’s memory is a patchwork — some usable, some off-limits, some just empty gaps — and the kernel starts out blind to all of it. So it reads the map the startup code left behind, then hires a librarian who lends out memory in identical little chunks and, the real trick, takes them back so the very same chunk can be lent out again.",
      watch:"The “[ok] physical memory: … MiB free in the frame allocator” line (the amount depends on the machine — the browser emulator has 64 MiB).",
      q:"How does the kernel know how much RAM the machine has — can it just start using memory from address 0 upward?",
      a:"No. Physical memory is a patchwork: real RAM, firmware-reserved regions, memory-mapped devices, and plain holes, all interleaved. The kernel can’t safely probe it — reading a device register has side effects. So the bootloader (GRUB), which surveyed the machine before our code ran, hands over a map, and the kernel manages only the parts marked usable.",
@@ -691,6 +723,7 @@ make debug      # boot frozen, attach GDB</code>
      proof:"a freed frame is handed straight back out on the next request — the self-test frees a frame and asserts the very same one is reused, not leaked.",
      links:[["src/frame_allocator.rs","frame_allocator.rs"],["src/multiboot.rs","multiboot.rs"],["docs/concepts/physical-memory.md","physical-memory.md (explainer)"]]},
     {n:"07", ms:"Milestone 7 · paging", title:"Building its own map of memory",
+     eli5:"The kernel stops using the real street addresses of memory and lays its own private map on top, where every address it uses is quietly translated to a real one behind the scenes. The daring part: it switches to the new map while running — like re-drawing the floor you’re standing on, where staying upright is the only proof you drew it right.",
      watch:"The “[ok] paging: switched to kernel-built page tables” line.",
      q:"Up to now the CPU used physical addresses directly. What changes when the kernel turns on its own paging?",
      a:"Every address the CPU touches stops being a physical address and becomes a virtual one — translated to real RAM through page tables the kernel builds and controls. Using frames from the allocator it just stood up, the kernel constructs its own 4-level page tables, identity-maps physical memory, and switches CR3 from the bootloader’s tables to its own.",
@@ -699,6 +732,7 @@ make debug      # boot frozen, attach GDB</code>
      proof:"the kernel survives loading CR3 with its own page tables, and the map / translate / unmap self-test round-trips cleanly on the serial log.",
      links:[["src/paging.rs","paging.rs"],["src/frame_allocator.rs","frame_allocator.rs"],["docs/concepts/virtual-memory.md","virtual-memory.md (explainer)"]]},
     {n:"08", ms:"Milestone 8 · heap", title:"Memory it can grow at runtime",
+     eli5:"Until now every drawer in the kitchen was a fixed size, decided before you started cooking. The heap is a big open pantry the kernel can carve up as it goes — and, crucially, put things back and reuse the space once it’s done with them.",
      watch:"The “[ok] heap: dynamic allocation (Vec, Box, String) now works” line.",
      q:"Until now every piece of memory the kernel used was a fixed size, decided in advance. What does a heap add that changes?",
      a:"Room to allocate memory whose size isn’t known until the program runs. Before this, everything lived on the stack or in static storage — fixed at compile time. A heap is a pool the kernel can carve up on demand, so data structures can grow: a Vec that keeps appending, a String built up character by character, a Box that puts one value on the heap. All of them ask the same allocator for space.",
@@ -707,6 +741,7 @@ make debug      # boot frozen, attach GDB</code>
      proof:"free an allocation, allocate again, and the SAME address (0x40000ff0) comes back — reclaim working, not a leak.",
      links:[["src/heap.rs","heap.rs"],["docs/concepts/heap.md","heap.md (explainer)"],["src/paging.rs","paging.rs"]]},
     {n:"09", ms:"Milestone 9 · timer + scheduling", title:"Running more than one thing at once",
+     eli5:"One brain, many jobs. Like a chef with a single pair of hands who takes a bite of one dish, sets the spoon down exactly where it was, stirs another, and switches so fast it looks like everything cooks at once — and a kitchen timer keeps forcing the switch, so no one dish can hog the stove.",
      watch:"The “[ok] scheduler: two tasks share the CPU, switched by a 100 Hz timer” line.",
      q:"The CPU has one core and runs one instruction at a time. So how can it appear to run two tasks “at once” — and what has to be saved when it switches from one to the other?",
      a:"It doesn’t truly run them together. It runs one for a slice, then swaps to the other and back, fast enough to look simultaneous. The saved state is the whole trick: a task is just a saved stack pointer, so switching means storing the outgoing task’s stack pointer and its six callee-saved registers, loading the incoming task’s, and returning — which resumes exactly where that task last stopped. And the switch can be forced by a timer interrupt, so a task doesn’t even have to cooperate to be switched away from.",
@@ -716,6 +751,7 @@ make debug      # boot frozen, attach GDB</code>
      caught:"a deadlock that only fires when the timer preempts a task mid-lock — the scheduler lock re-entered from inside the timer interrupt.",
      links:[["src/task.rs","task.rs"],["src/pit.rs","pit.rs"],["boot/switch.asm","switch.asm"],["docs/concepts/timer-and-scheduling.md","timer-and-scheduling.md (explainer)"]]},
     {n:"10", ms:"Milestone 10 · the shell", title:"The machine becomes something you type at",
+     eli5:"A key press is far too quick to stop and run a whole program, so the doorbell just drops each letter into a basket and leaves. A separate helper — the shell — empties the basket in its own time, spells out your words, and runs the command when you hit Enter. “Typing at the computer” is really just those two working in shifts.",
      watch:"The “[ok] shell: interactive prompt online” line, then the ziran> prompt.",
      q:"A key press fires a hardware interrupt. But the interrupt handler runs for microseconds and can’t “run the shell.” So how does a keystroke actually reach a program that reads a whole line and runs a command?",
      a:"The interrupt is only a producer. It decodes the scancode, drops the byte into a lock-free ring, acknowledges the controller, and returns — microseconds, no more. The shell is a separate scheduled task, the consumer: it drains that ring, echoes each character, builds up a line, and on Enter dispatches a command. “Interactive” turns out to be nothing more than a task polling a queue an interrupt keeps filling.",
@@ -725,6 +761,7 @@ make debug      # boot frozen, attach GDB</code>
      caught:"the shell growing its line buffer allocated while holding the scheduler lock with interrupts off — a task that could never be rescheduled to release it.",
      links:[["src/shell.rs","shell.rs"],["src/keyboard.rs","keyboard.rs"],["docs/concepts/input-and-shell.md","input-and-shell.md (explainer)"]]},
     {n:"11", ms:"Milestone 11 · the filesystem", title:"A file is a lie about flat bytes",
+     eli5:"A disk is a giant wall of numbered lockers with nothing written on them. A “file” is a small lie at the front: an index card that says “pretend lockers 80 to 93 are a note called motd.txt.” There is no real file — just the index and the promise — and the kernel’s real job is refusing index cards that don’t add up.",
      watch:"The “[ok] fs: RAM disk mounted — ls and cat now work” line.",
      q:"The disk is just a flat run of bytes with no names anywhere in it. So what actually makes some of those bytes a file called motd.txt that you can cat?",
      a:"A small directory table at the very front of the disk — a list of {name, offset, length}. When you type “cat motd.txt”, the kernel looks up that name in the table, finds it means “the bytes at 80..93,” and hands you exactly that slice. A file is a lie the header tells about flat bytes; nothing more. There is no magic layer where files “really” exist.",
@@ -734,6 +771,7 @@ make debug      # boot frozen, attach GDB</code>
      caught:"a superblock size field the code claimed to cross-check but never did — a malformed image could lie about its own length (now the fifth rejection, SizeMismatch).",
      links:[["src/fs.rs","fs.rs"],["src/shell.rs","shell.rs"],["docs/concepts/filesystem.md","filesystem.md (explainer)"]]},
     {n:"12", ms:"Milestone 12 · the file manager", title:"The end goal: a directory is a lie too",
+     eli5:"A folder is the very same trick, one level up: a “file” whose contents are just a list of more files. “Go into docs and open filesystem.txt” really means “follow the index to a smaller index, then follow that” — and the hard part is making sure a sneaky map that loops back on itself can’t send the kernel walking in circles forever.",
      watch:"The “[ok] file manager: cd, pwd, ls, cat over a directory tree” line.",
      q:"A file was a header’s lie about flat bytes. A folder has to live somewhere on that same flat disk — so what IS a directory, really?",
      a:"A directory is just a file whose bytes are more {name, offset, length} entries — the same lie, one level down. cd/ls walk that tree; a path like /docs/filesystem.txt is resolved by following named entries from the root, one component at a time. There is no new kind of thing underneath a folder, just the file lie told recursively.",
@@ -784,6 +822,9 @@ make debug      # boot frozen, attach GDB</code>
 
   // ---------- build the guided tour ----------
   var idx = 0;
+  // ELI5: an opt-in plain-language lens, default OFF. Persisted best-effort.
+  var eli5On = false;
+  try{ eli5On = localStorage.getItem("ziran-eli5")==="1"; }catch(e){}
   function renderProgress(){
     var p=$("progress"); p.innerHTML="";
     STEPS.forEach(function(_,i){
@@ -798,6 +839,9 @@ make debug      # boot frozen, attach GDB</code>
       var href = l[0].indexOf("docs/blog")===0||l[0].indexOf("STATUS")===0 ? BLOB+l[0] : src(l[0]);
       return '<a href="'+href+'" target="_blank" rel="noopener"><span class="ic">↗</span>'+esc(l[1])+'</a>';
     }).join("");
+    var eli5Html = (eli5On && s.eli5)
+      ? '<div class="eli5"><span class="e5-badge">🧸 In plain words</span><p>'+esc(s.eli5)+'</p></div>'
+      : '';
     var lessonHtml = s.lesson
       ? '<div class="lesson"><b>The lesson</b>'+esc(s.lesson)+'</div>'
       : '';
@@ -811,6 +855,7 @@ make debug      # boot frozen, attach GDB</code>
       '<div class="step-n">STEP '+s.n+'</div>'+
       '<div class="ms">'+esc(s.ms)+'</div>'+
       '<h3>'+esc(s.title)+'</h3>'+
+      eli5Html+
       '<div class="watch"><b>Watch for</b>'+esc(s.watch)+'</div>'+
       '<details class="predict"><summary>Predict: '+esc(s.q)+'</summary><div class="ans">'+esc(s.a)+'</div></details>'+
       '<div class="explain">'+s.ex+'</div>'+
@@ -823,6 +868,16 @@ make debug      # boot frozen, attach GDB</code>
   }
   $("prev").addEventListener("click",function(){ if(idx>0){idx--;renderStep();window.scrollTo({top:0,behavior:"smooth"});} });
   $("next").addEventListener("click",function(){ idx = idx===STEPS.length-1?0:idx+1; renderStep(); if(idx===0)window.scrollTo({top:0,behavior:"smooth"}); });
+  (function(){
+    var t=$("eli5toggle");
+    t.setAttribute("aria-checked", eli5On?"true":"false");
+    t.addEventListener("click",function(){
+      eli5On=!eli5On;
+      t.setAttribute("aria-checked", eli5On?"true":"false");
+      try{ localStorage.setItem("ziran-eli5", eli5On?"1":"0"); }catch(e){}
+      renderStep();
+    });
+  })();
   renderStep();
 
   // ---------- annotated log ----------
