@@ -104,6 +104,8 @@ enum Command<'a> {
     Clear,
     Mem,
     Ps,
+    Ls,
+    Cat(&'a str),
     Unknown(&'a str),
 }
 
@@ -127,6 +129,9 @@ fn parse(line: &str) -> Command<'_> {
         "clear" => Command::Clear,
         "mem" => Command::Mem,
         "ps" => Command::Ps,
+        "ls" => Command::Ls,
+        // A filename has no spaces, so take just the first token of the tail.
+        "cat" => Command::Cat(rest.split_whitespace().next().unwrap_or("")),
         other => Command::Unknown(other),
     }
 }
@@ -142,11 +147,15 @@ fn dispatch(line: &str) {
             println!("  clear         clear the screen");
             println!("  mem           show memory usage");
             println!("  ps            list tasks");
+            println!("  ls            list files");
+            println!("  cat <file>    print a file");
         }
         Command::Echo(rest) => println!("{rest}"),
         Command::Clear => crate::vga_buffer::clear_screen(),
         Command::Mem => cmd_mem(),
         Command::Ps => cmd_ps(),
+        Command::Ls => cmd_ls(),
+        Command::Cat(name) => cmd_cat(name),
         Command::Unknown(verb) => println!("unknown command: {verb} (try help)"),
     }
 }
@@ -172,6 +181,48 @@ fn cmd_ps() {
     for (id, state, current) in tasks {
         let marker = if current { "  (current)" } else { "" };
         println!("  [{id}] {}{marker}", state.name());
+    }
+}
+
+/// `ls` — list the RAM disk's files with sizes. Mounts the image fresh each time
+/// (it is ~150 bytes and stateless, so there is nothing to cache).
+fn cmd_ls() {
+    let image = crate::fs::boot_image();
+    let fs = match crate::fs::Fs::mount(&image) {
+        Ok(fs) => fs,
+        Err(e) => {
+            println!("ls: cannot mount filesystem: {e:?}");
+            return;
+        }
+    };
+    let files = fs.list();
+    if files.is_empty() {
+        println!("(no files)");
+        return;
+    }
+    for entry in files {
+        println!("  {:20} {} bytes", entry.name, entry.length);
+    }
+}
+
+/// `cat <file>` — print a file's bytes. Non-UTF-8 bytes are shown lossily rather
+/// than panicking (the on-disk data is arbitrary bytes, not guaranteed text).
+fn cmd_cat(name: &str) {
+    if name.is_empty() {
+        println!("usage: cat <file>");
+        return;
+    }
+    let image = crate::fs::boot_image();
+    let fs = match crate::fs::Fs::mount(&image) {
+        Ok(fs) => fs,
+        Err(e) => {
+            println!("cat: cannot mount filesystem: {e:?}");
+            return;
+        }
+    };
+    match fs.read(name) {
+        Some(bytes) => print!("{}", alloc::string::String::from_utf8_lossy(bytes)),
+        None => println!("no such file: {name}"),
     }
 }
 
@@ -245,6 +296,9 @@ pub fn self_test() {
     assert_eq!(parse("clear"), Command::Clear);
     assert_eq!(parse("mem"), Command::Mem);
     assert_eq!(parse("ps"), Command::Ps);
+    assert_eq!(parse("ls"), Command::Ls);
+    assert_eq!(parse("cat motd.txt"), Command::Cat("motd.txt"));
+    assert_eq!(parse("cat"), Command::Cat("")); // no filename -> empty, handled by cmd_cat
     assert_eq!(parse("echo hello  world"), Command::Echo("hello  world"));
     assert_eq!(parse("echo"), Command::Echo(""));
     assert_eq!(parse("bogus xyz"), Command::Unknown("bogus"));
