@@ -30,8 +30,10 @@ use alloc::vec::Vec;
 
 /// The signature at offset 0: ASCII `ZRFS`. The first thing `mount` checks.
 const MAGIC: [u8; 4] = *b"ZRFS";
-/// The only on-disk format version this reader understands.
-const VERSION: u16 = 1;
+/// The only on-disk format version this reader understands. v2 added the `kind`
+/// byte (subdirectories, Milestone 12); a v1 image now mounts as
+/// `UnsupportedVersion` (we keep only the current reader).
+const VERSION: u16 = 2;
 /// Superblock size, in bytes. The directory table starts right after it.
 const SUPERBLOCK_LEN: usize = 16;
 /// Directory-entry size, in bytes.
@@ -40,8 +42,15 @@ const DIRENT_LEN: usize = 32;
 const NAME_LEN: usize = 20;
 
 // Field offsets within a directory entry.
-const ENT_OFFSET: usize = 0x14; // u32: byte offset of the file's data
-const ENT_LENGTH: usize = 0x18; // u32: file length in bytes
+const ENT_OFFSET: usize = 0x14; // u32: byte offset of the node's region
+const ENT_LENGTH: usize = 0x18; // u32: region length in bytes
+const ENT_KIND: usize = 0x1C; // u32: 0 = file, 1 = directory (was v1 `reserved`)
+
+/// A directory entry names a plain file: its region is opaque bytes.
+const KIND_FILE: u32 = 0;
+/// A directory entry names a subdirectory: its region is itself an array of
+/// `length / DIRENT_LEN` directory entries — the same lie, recursively.
+const KIND_DIR: u32 = 1;
 
 /// Why an image failed to mount. Each variant is one validation step — and one
 /// deliberately-corrupt input the self-test feeds to prove the reader parses
@@ -62,6 +71,14 @@ pub enum FsError {
     /// overflows). The headline safety check: without it `read` would slice out
     /// of bounds.
     EntryOutOfBounds,
+    /// A subdirectory's region length is not a whole number of 32-byte entries.
+    BadDirLength,
+    /// A subdirectory's region does not start at/after the end of its parent —
+    /// the forward-ordering rule that makes validation *terminate*. Any cycle,
+    /// back-edge to an ancestor, or pointer into the superblock trips this.
+    DirNotForward,
+    /// A directory entry's `kind` field is neither file (0) nor directory (1).
+    BadKind,
 }
 
 /// One directory entry, as `ls` renders it.
@@ -108,21 +125,18 @@ impl<'a> Fs<'a> {
             return Err(FsError::Truncated);
         }
 
-        // Every entry's extent must lie within the image. Note we check only that
-        // it lies within the image, not that it sits in the data region
-        // (`offset >= dir_end`) or that extents don't overlap — so a crafted image
-        // could alias metadata or another file as "contents". That is harmless
-        // here (every such slice is still in-bounds and read-only), but tightening
-        // it into two more rejection cases is a natural M16 fuzzing-track addition.
-        for i in 0..file_count {
-            let base = SUPERBLOCK_LEN + i * DIRENT_LEN;
-            let offset = read_u32_le(image, base + ENT_OFFSET) as usize;
-            let length = read_u32_le(image, base + ENT_LENGTH) as usize;
-            let end = offset.checked_add(length).ok_or(FsError::EntryOutOfBounds)?;
-            if end > image.len() {
-                return Err(FsError::EntryOutOfBounds);
-            }
-        }
+        // Validate the whole directory tree, rooted at the root table. Every
+        // entry's extent is checked in-bounds (as in v1), and every subdirectory
+        // is recursed into — but only if its region starts at/after its parent's
+        // end (the forward-ordering rule), which makes the recursion provably
+        // terminate and rejects cycles. `forward_min = SUPERBLOCK_LEN` means a
+        // top-level subdirectory can't alias the superblock or the root table.
+        //
+        // Still-deliberate non-checks (M16 seeds): a FILE extent is checked
+        // in-bounds but not confined to the data region and may alias another
+        // file's or the metadata's bytes; only directory *tables* are kept from
+        // overlapping (a free consequence of forward-ordering).
+        validate_dir(image, SUPERBLOCK_LEN, file_count * DIRENT_LEN, SUPERBLOCK_LEN)?;
 
         Ok(Fs { image, file_count })
     }
@@ -159,6 +173,45 @@ impl<'a> Fs<'a> {
         }
         None
     }
+}
+
+/// Recursively validate one directory region `[off, off + len)`: every entry's
+/// extent must lie in the image, and every subdirectory must begin at/after
+/// `forward_min` — the end of its parent's region — before we recurse into it.
+///
+/// **Termination proof.** Along any root-to-descendant descent, the `forward_min`
+/// passed down equals the parent region's end, and a non-empty parent has
+/// `end > off`, so each child's `off >= end > parent.off`: the descent's start
+/// offsets are strictly increasing. A strictly increasing sequence of
+/// non-negative integers all `< image.len()` has length `<= image.len()`, so the
+/// recursion depth is bounded and the walk always terminates — no depth cap, no
+/// visited-set, no possibility of looping on a malformed (cyclic) image.
+fn validate_dir(image: &[u8], off: usize, len: usize, forward_min: usize) -> Result<(), FsError> {
+    if off < forward_min {
+        return Err(FsError::DirNotForward); // cycle / back-edge / into the superblock
+    }
+    if len % DIRENT_LEN != 0 {
+        return Err(FsError::BadDirLength); // not a whole array of entries
+    }
+    let end = off.checked_add(len).ok_or(FsError::EntryOutOfBounds)?;
+    if end > image.len() {
+        return Err(FsError::EntryOutOfBounds);
+    }
+    for i in 0..(len / DIRENT_LEN) {
+        let base = off + i * DIRENT_LEN;
+        let c_off = read_u32_le(image, base + ENT_OFFSET) as usize;
+        let c_len = read_u32_le(image, base + ENT_LENGTH) as usize;
+        let c_end = c_off.checked_add(c_len).ok_or(FsError::EntryOutOfBounds)?;
+        if c_end > image.len() {
+            return Err(FsError::EntryOutOfBounds);
+        }
+        match read_u32_le(image, base + ENT_KIND) {
+            KIND_FILE => {} // a file's region only has to be in-bounds
+            KIND_DIR => validate_dir(image, c_off, c_len, end)?, // child must be >= this region's end
+            _ => return Err(FsError::BadKind),
+        }
+    }
+    Ok(())
 }
 
 /// Read a little-endian `u16` at `off`. The caller (only `mount`, over a
@@ -270,8 +323,36 @@ pub fn self_test() {
     oob[off_field..off_field + 4].copy_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
     assert_eq!(Fs::mount(&oob).err(), Some(FsError::EntryOutOfBounds));
 
+    // --- Milestone 12: subdirectory-tree validation rejections ---
+    let kind0 = SUPERBLOCK_LEN + ENT_KIND; // entry 0's kind field
+    let off0 = SUPERBLOCK_LEN + ENT_OFFSET;
+    let len0 = SUPERBLOCK_LEN + ENT_LENGTH;
+    let file_count = read_u16_le(&image, 0x06) as usize;
+    let root_end = (SUPERBLOCK_LEN + file_count * DIRENT_LEN) as u32;
+
+    // A subdirectory whose region points back at the root table is a cycle: the
+    // forward-ordering rule rejects it (rather than looping forever) — the
+    // milestone's headline safety property.
+    let mut cycle = image.clone();
+    cycle[kind0..kind0 + 4].copy_from_slice(&KIND_DIR.to_le_bytes());
+    cycle[off0..off0 + 4].copy_from_slice(&(SUPERBLOCK_LEN as u32).to_le_bytes());
+    cycle[len0..len0 + 4].copy_from_slice(&(DIRENT_LEN as u32).to_le_bytes());
+    assert_eq!(Fs::mount(&cycle).err(), Some(FsError::DirNotForward));
+
+    // A subdirectory whose length isn't a whole number of 32-byte entries.
+    let mut bad_len = image.clone();
+    bad_len[kind0..kind0 + 4].copy_from_slice(&KIND_DIR.to_le_bytes());
+    bad_len[off0..off0 + 4].copy_from_slice(&root_end.to_le_bytes());
+    bad_len[len0..len0 + 4].copy_from_slice(&33u32.to_le_bytes());
+    assert_eq!(Fs::mount(&bad_len).err(), Some(FsError::BadDirLength));
+
+    // An entry whose kind is neither file (0) nor directory (1).
+    let mut bad_kind = image.clone();
+    bad_kind[kind0..kind0 + 4].copy_from_slice(&99u32.to_le_bytes());
+    assert_eq!(Fs::mount(&bad_kind).err(), Some(FsError::BadKind));
+
     crate::serial_println!(
-        "[ok] fs: mounted {} files, motd.txt verified byte-for-byte, 5 corrupt images rejected",
+        "[ok] fs: mounted {} files, motd.txt verified byte-for-byte, 8 corrupt images rejected",
         list.len()
     );
     crate::serial_println!("M11: filesystem online");
