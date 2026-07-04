@@ -73,7 +73,7 @@ DOCKER
 docker rm -f build-qemu >/dev/null 2>&1 || true
 echo "==> starting build container"
 docker run --rm --init -d --name build-qemu \
-  -v "$QEMU_REPO:/qemu/:ro" \
+  -v "$QEMU_REPO:/qemu" \
   -v "$ROOT/build/ziran.iso:/images/ziran.iso:ro" \
   build-qemu
 
