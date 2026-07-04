@@ -153,7 +153,7 @@ static SCHED: Mutex<Option<Scheduler>> = Mutex::new(None);
 /// Install the scheduler with `kernel_main` as the idle task. Call once, after
 /// the heap is up. Interrupt-safe: clears IF around the lock so a timer tick can
 /// never re-enter the scheduler (via `preempt`) while this holds `SCHED`.
-fn init() {
+pub fn init() {
     let flags = interrupts::save_and_disable();
     *SCHED.lock() = Some(Scheduler::with_idle());
     interrupts::restore(flags);
@@ -162,7 +162,7 @@ fn init() {
 /// Create a task and enqueue it as ready. Returns its id. Interrupt-safe for the
 /// same reason as [`init`] — a plain `SCHED.lock()` here with interrupts enabled
 /// would deadlock if the timer preempted mid-critical-section.
-fn spawn(entry: extern "C" fn()) -> u64 {
+pub fn spawn(entry: extern "C" fn()) -> u64 {
     let flags = interrupts::save_and_disable();
     let id = {
         let mut guard = SCHED.lock();

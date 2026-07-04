@@ -13,7 +13,7 @@
 //! we must always read it, even for keys we don't map.
 
 use crate::port::inb;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 
 const DATA_PORT: u16 = 0x60;
 
@@ -118,4 +118,56 @@ fn translate(code: u8, shift: bool) -> Option<char> {
     };
 
     Some(if shift { hi } else { lo })
+}
+
+// --- Input ring (Milestone 10) ----------------------------------------------
+//
+// The keyboard IRQ is a *producer* and the shell task is a *consumer*, so
+// keystrokes flow through a lock-free single-producer/single-consumer ring of
+// bytes rather than being echoed inside the handler. This is the house rule made
+// concrete: state touched by an interrupt uses atomics, never a lock — a handler
+// must never risk blocking. With exactly one producer and one consumer, each
+// index has a single writer, so no lock is needed at all.
+//
+// `push` (the IRQ) publishes a byte by storing it and then advancing `TAIL` with
+// a Release; `pop` (the shell) reads `TAIL` with an Acquire before touching the
+// byte, so it never observes a slot before the byte lands in it. On one core this
+// really forbids *compiler* reordering — there is no second core to race — but the
+// Acquire/Release pair states the contract correctly regardless.
+
+/// Ring capacity (power of two). 256 bytes is far more backlog than a human
+/// typist can build against a shell that drains every timer tick.
+const RING_CAP: usize = 256;
+
+/// The ring storage. One `AtomicU8` per slot; the index ordering fences them, so
+/// the bytes themselves use `Relaxed`.
+static RING: [AtomicU8; RING_CAP] = [const { AtomicU8::new(0) }; RING_CAP];
+/// Consumer cursor — only the shell task advances it.
+static HEAD: AtomicUsize = AtomicUsize::new(0);
+/// Producer cursor — only the keyboard IRQ advances it.
+static TAIL: AtomicUsize = AtomicUsize::new(0);
+
+/// Enqueue one input byte. Called **only** from the keyboard IRQ, so it is
+/// lock-free and never blocks. A full ring drops the newest byte — bounded and
+/// honest; a keystroke lost under a 256-byte backlog is a non-event.
+pub fn push(byte: u8) {
+    let tail = TAIL.load(Ordering::Relaxed);
+    let next = (tail + 1) % RING_CAP;
+    if next == HEAD.load(Ordering::Acquire) {
+        return; // full: drop the newest keystroke rather than overwrite unread data
+    }
+    RING[tail].store(byte, Ordering::Relaxed);
+    TAIL.store(next, Ordering::Release); // publish only after the byte is written
+}
+
+/// Dequeue one input byte, or `None` if the ring is empty. Called **only** from
+/// the shell task.
+pub fn pop() -> Option<u8> {
+    let head = HEAD.load(Ordering::Relaxed);
+    if head == TAIL.load(Ordering::Acquire) {
+        return None; // empty
+    }
+    let byte = RING[head].load(Ordering::Relaxed);
+    HEAD.store((head + 1) % RING_CAP, Ordering::Release);
+    Some(byte)
 }

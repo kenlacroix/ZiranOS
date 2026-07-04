@@ -15,7 +15,7 @@
 //! The per-vector entry stubs live in `boot/isr.asm`; this file is the Rust half
 //! that builds the table and decides what each fault *means*.
 
-use crate::{hlt_loop, keyboard, pic, print, println, serial_println};
+use crate::{hlt_loop, keyboard, pic, println, serial_println};
 
 /// The vector the timer's IRQ0 is remapped to (see `pic`): 0x20 + 0 = 0x20.
 const TIMER_VECTOR: usize = pic::PIC1_OFFSET as usize;
@@ -245,12 +245,15 @@ pub extern "C" fn interrupt_dispatch(ctx: &InterruptContext) {
             crate::task::preempt();
         }
 
-        // Keyboard IRQ (Milestone 5). Read the scancode, echo any character it
-        // produced, and — crucially — send the PIC an end-of-interrupt so it
-        // will deliver the next keystroke. Then return (iretq) to resume.
+        // Keyboard IRQ (Milestone 5, rewired for Milestone 10). The handler is now
+        // a pure *producer*: decode the scancode and drop the byte into the
+        // lock-free input ring, then EOI and return. Echoing and all handling move
+        // to the shell *task* (the consumer). This is deliberate — it also removes
+        // a latent deadlock: the handler no longer takes the VGA writer lock, so it
+        // can never spin on a lock a preempted task is holding mid-print.
         KEYBOARD_VECTOR => {
             if let Some(c) = keyboard::handle_interrupt() {
-                print!("{}", c);
+                keyboard::push(c as u8);
             }
             pic::send_eoi(1);
         }

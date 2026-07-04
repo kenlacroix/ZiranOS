@@ -35,6 +35,7 @@ mod pic;
 mod pit;
 mod port;
 mod serial;
+mod shell;
 mod task;
 mod vga_buffer;
 
@@ -187,8 +188,20 @@ pub extern "C" fn kernel_main(multiboot_info_addr: u64) -> ! {
     task::preemptive_self_test();
     println!("[ok] scheduler: preemptive multitasking works (Milestone 9)");
 
+    // Milestone 10: hand the machine to an interactive shell. First prove the
+    // line editor deterministically (interactive typing is a manual check; the
+    // editing logic is pinned by this self-test). The self-tests above each
+    // rebuilt the scheduler and left it full of finished tasks, so start a fresh
+    // one, then spawn the shell as a task and yield into it. `kernel_main` becomes
+    // the idle task (id 0): it falls into hlt_loop below, woken by each tick so
+    // the scheduler can preempt back to the shell. See src/shell.rs.
+    shell::self_test();
+    task::init();
+    task::spawn(shell::shell_main);
+    task::yield_now();
+
     // Idle. The CPU halts until an interrupt (a timer tick or keystroke) wakes it;
-    // the handler runs and `iretq` returns us right back here to halt again.
+    // the scheduler runs the shell, and control returns here to halt again.
     hlt_loop();
 }
 
