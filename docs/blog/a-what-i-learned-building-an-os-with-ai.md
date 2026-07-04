@@ -16,14 +16,13 @@ achievement. The second is "I hand-typed a kernel, the old-fashioned way," which
 is a fine thing to do and not what happened here.
 
 The interesting thing is in between, and it's a *method*: rigorous
-AI-assisted systems engineering, and the question of whether that method holds
-up in the least forgiving domain I could find. Web code that's wrong throws an
-exception and you read a stack trace. Kernel code that's wrong at ring 0
-triple-faults and the machine silently reboots — no trace, no line number, just
-a black screen and the smug little QEMU logo again. If a disciplined AI-assisted
-loop can produce correct systems code *there*, where the feedback is a reboot
-instead of an error message, it can produce it anywhere. That was the real
-experiment. The OS was the test rig.
+AI-assisted systems engineering, tested in the least forgiving domain I could
+find. Web code that's wrong throws an exception and you read a stack trace.
+Kernel code that's wrong at ring 0 triple-faults and the machine silently
+reboots — no trace, no line number, just a black screen and the smug little QEMU
+logo again. If a disciplined AI-assisted loop can produce correct systems code
+*there*, where the feedback is a reboot instead of an error message, it can
+produce it anywhere. That was the real experiment. The OS was the test rig.
 
 ## What I set out to learn
 
@@ -91,7 +90,7 @@ commits:
 The division of labor is the thing to notice. The human owns the vision, the
 non-goals, and the loop. The AI does mechanical work *inside* the loop. And the
 trail — self-tests asserted by CI, the reviews, the honest write-ups including
-the dead ends — is the proof, available to anyone who doubts it.
+the dead ends — is the proof.
 
 ## The most transferable lesson
 
@@ -125,25 +124,24 @@ Four milestones in a row — the scheduler, the shell, the read filesystem, and
 the file manager — shipped with **zero runtime debugging**. No triple-faults, no
 GDB bug-hunts, no recompile-and-pray.
 
-That surprised me, and I want to be careful about *why*, because it wasn't
-because the work was easy. Context switches and recursive validators are exactly
-the things that eat days. What happened is that the rigor moved the finding of
-bugs *before the running* instead of after. The eng-plan's hazard analysis
-caught the reentrant-deadlock surface on paper. The deterministic self-tests
-turned "did preemption work?" into a CI line that either prints or hangs the
-boot. The adversarial review caught the two DoS defects while they were still
-latent. Bugs found before the machine runs cost minutes; bugs found after a
-silent reboot cost days. Rigor up front simply *beat* debugging after the fact.
+That surprised me, and the *why* matters, because it wasn't that the work was
+easy — context switches and recursive validators are exactly the things that eat
+days. The rigor moved the *finding* of bugs before the running instead of after.
+The eng-plan's hazard analysis caught the reentrant-deadlock surface on paper.
+The deterministic self-tests turned "did preemption work?" into a CI line that
+either prints or hangs the boot. The adversarial review caught the two DoS
+defects while they were latent. Bugs found before the machine runs cost minutes;
+bugs found after a silent reboot cost days. Rigor up front simply *beat*
+debugging after the fact.
 
-The other surprise was that the hardest skill wasn't technical — it was **scope
-discipline**, exercised over and over as the choice to take the minimal cut that
-still teaches the thing, and then *writing down why*. A custom read-only
+The other surprise: the hardest skill wasn't technical — it was **scope
+discipline**, taken over and over as the minimal cut that still teaches the
+thing, and then *writing down why*. A custom read-only
 filesystem instead of FAT16 (so no `mkfs.fat` build-magic hides how bytes become
-a directory). The old PIT timer instead of the local APIC (the scope-correct
-*first* timer; the APIC got written down as its own future milestone
-specifically so it couldn't leak back in). An `hlt`-and-poll idle loop instead
-of a real blocking wait. Every one of those was a temptation to build something
-more "real," and every "no" is recorded with its reasoning.
+a directory). The old PIT timer instead of the local APIC (written down as its own
+future milestone so it couldn't leak back in). An `hlt`-and-poll idle loop
+instead of a real blocking wait. Every one of those was a temptation to build
+something more "real," and every "no" is recorded with its reasoning.
 
 ## Where the human still mattered
 
@@ -176,11 +174,13 @@ the whole value. A highlight reel teaches nobody.
 
 And the best part is that none of this asks for your trust. It's all verifiable.
 Read the self-tests that CI asserts on every push. Read the reviews and the
-retros. Find the `FLAG{ziran-boundary-leak}` planted on the disk — bytes with no
-directory entry, unreachable by any `ls` or `cat`, waiting for a future
-milestone to try to steal them. Or just boot the thing yourself: `./run` drops
-the shell onto your terminal over the serial line, and a browser version is on
-the way. Type `ls`, `cd docs`, `cat filesystem.txt`. It's all right there — the
-mechanisms, and the proof that they're mechanisms and not magic.
+retros. Watch a real recorded session drive the shell over the serial line —
+`ps`, `ls`, `cd`, `cat`, the `is a directory` refusal, all live. Find the
+`FLAG{ziran-boundary-leak}` planted on the disk — bytes with no directory entry,
+unreachable by any `ls` or `cat`, waiting for a future milestone to try to steal
+them. Or just boot the thing yourself: `./run` drops the shell onto your
+terminal over the serial line, and a browser build that boots the real kernel is
+on the way. Type `ls`, `cd docs`, `cat filesystem.txt`. It's all right there —
+the mechanisms, and the proof that they're mechanisms and not magic.
 
 That was the point.
