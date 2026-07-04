@@ -125,6 +125,19 @@ docs/MILESTONE_CHECKLIST.md  the loop every milestone runs
 Requires: a Rust toolchain (pinned to stable in `rust-toolchain.toml`), `nasm`,
 `ld`, and for booting `qemu-system-x86_64`, `grub-mkrescue`, and `xorriso`.
 
+**Fastest path — one command:**
+
+```sh
+./run              # build it and drop into the interactive shell on this terminal
+```
+
+`./run` auto-detects the platform toolchain (no flags to remember), checks you
+have the tools (and tells you what to `brew install` if not), then boots the
+kernel with its shell wired to your terminal. Type `help`, `ps`, `mem`, `ls`,
+`cd docs`, `cat filesystem.txt`; quit with `Ctrl-A` then `X`.
+
+The individual steps, if you want them:
+
 ```sh
 rustup target add x86_64-unknown-none   # one-time; also in rust-toolchain.toml
 

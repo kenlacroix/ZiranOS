@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# Ziran OS — one command to build it and drop into the interactive shell.
+#
+#   ./run
+#
+# The kernel boots onto THIS terminal over the serial line (no window needed),
+# so it works even where the legacy VGA text console isn't displayed (macOS
+# UEFI). Toolchain flags are auto-detected per platform — you don't type them.
+set -euo pipefail
+cd "$(dirname "$0")"
+
+# --- platform-specific toolchain overrides (see the Makefile header) ---------
+ARGS=()
+NEED=(qemu-system-x86_64 nasm)
+if [[ "$(uname)" == "Darwin" ]]; then
+  # macOS: Apple's ld/readelf can't link this image, GRUB ships under an
+  # x86_64-elf- prefix, there's no `timeout`, and the ISO is UEFI-only.
+  ARGS=(LD=x86_64-elf-ld READELF=x86_64-elf-readelf
+        GRUB_MKRESCUE=x86_64-elf-grub-mkrescue TIMEOUT=gtimeout QEMU_FIRMWARE=uefi)
+  NEED+=(x86_64-elf-ld x86_64-elf-grub-mkrescue gtimeout)
+fi
+
+# --- friendly preflight -------------------------------------------------------
+missing=()
+for t in "${NEED[@]}"; do command -v "$t" >/dev/null 2>&1 || missing+=("$t"); done
+if ((${#missing[@]})); then
+  echo "Missing tools: ${missing[*]}"
+  if [[ "$(uname)" == "Darwin" ]]; then
+    echo "Install (Homebrew):"
+    echo "  brew install qemu nasm coreutils x86_64-elf-binutils x86_64-elf-grub"
+  else
+    echo "Install nasm, qemu, grub-pc-bin/grub2, and xorriso from your package manager."
+  fi
+  exit 1
+fi
+
+cat <<'BANNER'
+Building and booting Ziran OS — the shell will appear on this terminal.
+
+  try:   help · ps · mem · pwd · ls · cd docs · cat filesystem.txt
+  quit:  press Ctrl-A, release, then X
+
+BANNER
+
+exec make console "${ARGS[@]}"
