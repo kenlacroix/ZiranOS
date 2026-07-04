@@ -15,8 +15,8 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started
 | 5 | Keyboard input (PS/2) | ✅ | PIC remapped to 0x20–0x2F + masked to keyboard only (`src/pic.rs`); IRQ1 handler reads scancodes and echoes (`src/keyboard.rs`, US QWERTY + shift); `sti` enabled; backspace works; spurious-IRQ safe. See `docs/concepts/keyboard-and-pic.md`. |
 | 6 | Physical memory management | ✅ | `multiboot.rs` parses the Multiboot2 memory map (pointer already in RDI at handoff); `frame_allocator.rs` is a bitmap allocator over usable RAM with alloc/free/reclaim, reserving frame 0, the kernel image (`kernel_start`/`kernel_end` linker symbols), and the boot structure. Self-test + `M6:` marker asserted by CI. See `docs/concepts/physical-memory.md`. |
 | 7 | Paging / virtual memory | ✅ | `paging.rs` builds the kernel's own 4-level page tables from M6 frames, identity-maps physical memory, verifies them in-code, and switches `CR3` off the boot map. Exposes `translate`/`map_page` (fallible)/`unmap_page`; self-test round-trips a frame mapped above the 1 GiB window. See `docs/concepts/virtual-memory.md`. |
-| 8 | Heap allocator (`alloc`) | ⬜ | Next. `Vec`/`Box`/`String` on a heap, its pages backed by M7 mappings and M6 frames. |
-| 9 | Timer + scheduling | ⬜ | |
+| 8 | Heap allocator (`alloc`) | ✅ | `heap.rs`: a linked-list free-list allocator as the `#[global_allocator]`, over a 1 MiB heap eagerly mapped at 1 GiB (M7 `map_page` onto M6 frames). `Vec`/`Box`/`String` work; self-test proves reclaim (free → re-alloc reuses the address). See `docs/concepts/heap.md`. |
+| 9 | Timer + scheduling | ⬜ | Next. A periodic timer interrupt (PIT/APIC) and the first cooperative task switching. |
 | 10 | Simple shell | ⬜ | |
 | 11 | Filesystem (read) | ⬜ | |
 | 12 | **File manager** (end goal) | ⬜ | |
@@ -31,7 +31,7 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started
 - **Assembles / compiles / links:** verified — `make` produces a valid Multiboot2
   ELF (`make check-header` confirms the magic).
 - **Boots under QEMU:** exercised by CI (`make run-headless`), which asserts both
-  the long-mode marker and `M7: paging enabled`. Also boot-tested natively on
+  the long-mode marker and `M8: kernel heap online`. Also boot-tested natively on
   macOS (Apple Silicon) under UEFI — see `docs/POST_UPDATE_SETUP.md`.
 - **Frame allocator:** the boot self-test proves alloc hands out distinct,
   aligned frames; reclaim returns a freed frame; and double-free / out-of-range
@@ -40,14 +40,18 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started
   switch proves it mapped its own code/stack/GDT/IDT); the self-test maps a frame
   at a virtual address above the 1 GiB identity window and round-trips a sentinel
   through both the virtual and physical address.
+- **Heap:** `Vec`/`Box`/`String` work; the self-test grows a `Vec` past its
+  capacity, allocates across four pages, and proves reclaim (free → re-alloc
+  returns the same address) — plus that runtime allocation touches no frames.
 
-## Next up (Milestone 8 — heap allocator)
+## Next up (Milestone 9 — timer + scheduling)
 
-1. Reserve a virtual address range for the kernel heap and back it with pages,
-   mapped via the Milestone 7 `map_page` onto Milestone 6 frames.
-2. Implement a `GlobalAlloc` so `alloc`'s `Vec`, `Box`, and `String` work — the
-   first dynamic allocation in the kernel.
-3. This completes the memory stack: frames (M6) → pages (M7) → heap (M8).
+1. Program a periodic timer (the 8253/8254 PIT, or the local APIC timer) and wire
+   its IRQ through the PIC to a handler, sending the EOI like the keyboard IRQ.
+2. Count ticks and prove the timer fires at a known rate — the kernel's first
+   sense of *time*.
+3. A first taste of scheduling: switch between two simple tasks on the tick — the
+   heap (M8) now makes per-task data structures possible.
 
 Deferred (fold in when robustness matters): a proper Rust-built GDT with a TSS +
 IST stack for the double-fault handler, so even a stack overflow reports instead

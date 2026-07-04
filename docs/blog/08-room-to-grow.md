@@ -1,9 +1,41 @@
 # Room to grow
 
-*Milestone 8 — the heap allocator. Draft in progress.*
+*Milestone 8 — the heap allocator. The kernel gains dynamic memory: `Vec`, `Box`,
+and `String` start working with no operating system underneath.*
 
-> Draft: office-hours below; scope-guard, eng-plan, build, and retro fill in as
-> the milestone proceeds.
+> New to this? Read [docs/concepts/heap.md](../concepts/heap.md) alongside — it
+> explains what a heap is, how `Vec` gets its memory, and the free-list allocator,
+> from scratch.
+
+Everything the kernel has allocated so far was fixed-size and known at compile
+time — the stack, the static page tables, the frame bitmap. This milestone adds
+the thing that lets data structures *grow at runtime*: a **heap**, and with it
+Rust's `alloc` crate. It sits directly on the last two milestones — a virtual
+region whose pages M7 maps onto M6 frames — completing the stack the memory work
+has been building: **frames → pages → heap.**
+
+### Milestone 8 — heap — checklist
+
+Think
+- [x] office-hours — below
+- [x] scope-guard — below
+
+Plan
+- [x] eng-plan — [docs/planning/milestone-08-eng-plan.md](../planning/milestone-08-eng-plan.md)
+
+Build
+- [x] Working, demoable state; `make` clean; header check passes
+- [x] No new warnings; new `unsafe` justified (the free-list's raw-pointer nodes)
+
+Review
+- [x] kernel-review — 3-lens adversarial pass over the diff
+
+Security
+- [x] No new attack surface (still ring 0, one heap, no data boundary) — /red-team N/A
+
+Reflect
+- [x] document-milestone (STATUS/README/this post)
+- [ ] CI green (build + headless QEMU boot) — runs on push
 
 ## Office hours
 
@@ -54,4 +86,101 @@
    free-list is enough. Demand-paging the heap (lazy) is deferred — eager mapping
    is simpler and M7's `#PF` handler halts. Per-process heaps / a userspace
    `malloc` are M13. Keep it: one kernel heap, fixed region, one honest allocator.
-   Full `/scope-guard` next.
+
+## Scope-guard
+
+Verdict: **Hold**, deliberately minimal. A linked-list free-list, not a buddy or
+slab allocator with coalescing — those solve performance we can't measure yet.
+No bump allocator (it leaks every reallocation; M6 rejected one for the same
+reason). Eager mapping, one kernel heap, no new crate dependency — hand-rolled in
+the `spin`-only, no-`x86_64` house style.
+
+## Eng-plan (summary)
+
+A new `src/heap.rs` plus the `alloc`-crate wiring in `lib.rs`:
+- `heap::init()` reserves a **1 MiB virtual region at `0x4000_0000`** (1 GiB — the
+  first byte past the identity map, M7's `map_page` as its first real customer)
+  and **eagerly maps** every page onto an M6 frame.
+- The allocator is a **linked-list free-list**: each free region stores a
+  `ListNode { size, next }` *inside its own bytes* — the intrusive list M6 wanted
+  for frames but couldn't use until M7 gave us mapped memory to hold the links.
+  first-fit with splitting and alignment; `dealloc` pushes the block back, so it
+  *reclaims*.
+- Behind `spin::Mutex` in a `LockedHeap` newtype, because `GlobalAlloc` takes
+  `&self` and the orphan rule forbids `impl GlobalAlloc for Mutex<…>`.
+
+The build order isolated the historical time-sink (the linker/`alloc` ceremony)
+from the algorithm: a throwaway bump allocator first, to prove it *links* and
+`Box`/`Vec` work, then the free-list. Full plan in
+[docs/planning/milestone-08-eng-plan.md](../planning/milestone-08-eng-plan.md).
+
+## What got built
+
+- `src/heap.rs`: the free-list allocator, `heap::init` (map the region + hand it
+  to the allocator), and `heap::self_test`.
+- `src/lib.rs`: `extern crate alloc;`, `mod heap;`, and — that's the whole
+  ceremony on stable.
+- `src/paging.rs`: `WRITABLE` made public so the heap can map writable pages.
+- The `Makefile` headless boot test now asserts `M8: kernel heap online`.
+
+## Verification status (honest)
+
+Boot-tested live under QEMU. The serial log:
+
+```
+[ok] heap: 1024 KiB mapped at 0x000040000000 (256 pages)
+M8: kernel heap online
+[ok] heap: Box, Vec (grown), String, and a 4-page Vec all allocate
+[ok] heap: freed 0x000040000ff0 and got the same address back (reclaim works)
+```
+
+The `Vec` is pushed past its capacity (forcing a real reallocation), the 4-page
+`Vec` proves the whole region is mapped, and the reclaim line is the honest one:
+free an allocation, allocate again, get the **same address** back. A bump
+allocator would return a fresh, higher address and fail that assert — which is
+exactly why it was rejected.
+
+## Retro
+
+**Plan vs. reality.** The eng-plan was accurate and the build-order de-risking
+worked: the ceremony *linked on the first try*, isolated from the allocator by a
+throwaway bump. The one naive spot the review caught: the plan's frame accounting
+was off by two — it reasoned about M8 in isolation and forgot that M7's self-test
+had already leaked exactly the PD+PT for `0x4000_0000` that the heap then reuses,
+so init costs 256 frames, not 258.
+
+**What broke, and for how long.** Nothing. The ceremony linked, the bump worked,
+the free-list worked, reclaim passed. Near-zero debugging — and that's the
+milestone's real lesson.
+
+**The assumption worth re-examining (the lede).** PLAN.md tags this milestone
+*"getting `Vec` to work felt bigger than it should."* That reputation is a
+**stale artifact of the nightly era.** Before Rust 1.68 a `no_std` build that used
+`alloc` failed to link without a hand-written `#[alloc_error_handler]`, gated
+behind a nightly feature — *that* was the pain. On the pinned stable toolchain the
+research fan-out found the whole ceremony is now two lines: `extern crate alloc;`
+and `#[global_allocator]`. An OOM just panics through the panic handler we already
+have. A milestone's fearsome reputation can be a version-old ghost; checking
+beats budgeting for it.
+
+**What earned its keep.** The research fan-out, again — one agent's cited answer
+(the default alloc-error handler, stable since 1.68) meant I never wrote the
+doomed nightly ceremony. And the build-order split: proving the linker/`alloc`
+plumbing with a trivial bump allocator meant that when I added ~150 lines of
+free-list, any new failure could *only* be the algorithm, not the plumbing.
+
+**One thing to do differently.** When a milestone builds directly on the previous
+one's memory, trace the previous one's *actual* end-state, not its intended one —
+M7's deliberate two-table leak changed M8's frame math, and the review shouldn't
+be where that coupling first surfaces.
+
+## Takeaway for the next person
+
+A heap is just a pool of memory you mapped, plus a bookkeeper that hands out and
+takes back pieces of it. `Vec`, `Box`, and `String` aren't magic — they all call
+one trait, `GlobalAlloc`, and on bare metal *you* are the implementation, over
+memory *you* mapped onto frames *you* found. The honest test that you built a real
+allocator and not a leak is a single line: free something, allocate again, and get
+the same address back. Next: **the memory stack is complete** (frames → pages →
+heap), and Milestone 9 — a timer and the first taste of scheduling — starts
+building on top of it.

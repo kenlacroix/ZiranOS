@@ -265,8 +265,8 @@
       <h1>Boot a real OS in this tab — then learn <em>how every layer works</em>.</h1>
       <p class="lead">No Linux underneath. This is a hand-written kernel — assembly boot code, a <span class="mono">no_std</span> Rust core, its own interrupt and keyboard handling — running on a tiny PC emulator right here. The tour beside it asks you to guess what happens, then shows you why.</p>
       <div class="meta">
-        <span class="tag"><b>Milestones 0–7</b> booted</span>
-        <span class="tag">from <b>512 bytes</b> to its own virtual memory</span>
+        <span class="tag"><b>Milestones 0–8</b> booted</span>
+        <span class="tag">from <b>512 bytes</b> to a working heap</span>
         <span class="tag">every claim links to <b>real source</b></span>
       </div>
     </div>
@@ -461,6 +461,8 @@ make debug      # boot frozen, attach GDB</code>
           <dd>A hardware trick where every address a program uses (a <em>virtual</em> address) is translated to a real physical one through lookup tables called <em>page tables</em>. It lets memory be protected, relocated, and handed out flexibly. This is now built: the kernel constructs its own page tables from frames and switches the CPU onto them, so it manages its own memory map. The heap (the next milestone) grows on top of it.</dd>
           <dt>TLB</dt>
           <dd>A small cache inside the processor that remembers recent virtual→physical translations, so paging stays fast instead of walking the page tables on every single memory access.</dd>
+          <dt>Heap <span class="term-alt">/ allocator</span></dt>
+          <dd>The <em>heap</em> is a pool of memory set aside for data whose size isn’t known until the program actually runs — anything that grows. The <em>allocator</em> is the bookkeeper that hands out pieces of it on request and reclaims them when you’re done, so the space can be reused. It’s what makes <code>Vec</code>, <code>Box</code>, and <code>String</code> work; the kernel wrote its own and backed it with pages it mapped itself.</dd>
         </dl>
       </details>
     </div>
@@ -522,6 +524,9 @@ make debug      # boot frozen, attach GDB</code>
     {t:"[ok] paging: switched to kernel-built page tables", c:"ok",
      note:"Using frames from the allocator it just built, the kernel constructed its own 4-level page tables, identity-mapped physical memory, and switched CR3 away from the bootloader’s tables to its own. The CPU now runs on a memory map the kernel controls, not the bootloader’s — every address it touches is translated through tables the kernel owns. The map/translate/unmap self-test and the “M7: paging enabled” marker go to the serial log; this is the one-line headline.",
      link:{f:"src/paging.rs",l:"paging.rs"}},
+    {t:"[ok] heap: dynamic allocation (Vec, Box, String) now works", c:"ok",
+     note:"The kernel now has a heap. It reserved a 1 MiB region of virtual address space at 1 GiB, mapped its pages onto real frames (paging + the frame allocator, working together), and installed its own linked-list allocator as Rust’s #[global_allocator]. From here on, Vec, Box, and String — anything that grows at runtime — just work, with no OS beneath them: every allocation bottoms out in an allocator the kernel wrote, backed by memory it mapped itself. The Box/Vec/String/reclaim self-test and the “M8: kernel heap online” marker go to the serial log; this is the one-line headline.",
+     link:{f:"src/heap.rs",l:"heap.rs"}},
     {t:"", c:"blank"},
     {t:"triggering a test breakpoint (int3)...", c:"info",
      note:"The kernel is about to break itself on purpose. int3 raises exception vector 3 — a “breakpoint.” On a kernel with no handler, an exception cascades to a triple fault and the machine silently reboots.",
@@ -580,10 +585,16 @@ make debug      # boot frozen, attach GDB</code>
      a:"Every address the CPU touches stops being a physical address and becomes a virtual one — translated to real RAM through page tables the kernel builds and controls. Using frames from the allocator it just stood up, the kernel constructs its own 4-level page tables, identity-maps physical memory, and switches CR3 from the bootloader’s tables to its own.",
      ex:"<p>Paging is the hardware trick underneath all modern memory management: a <em>virtual</em> address is walked through four levels of <em>page tables</em> to find the physical frame it maps to, and the kernel owns those tables. That’s what lets memory be placed where the kernel wants it and (next milestone) lets a heap grow into address space that no physical RAM sat at before.</p><p>The honesty here is in the switch itself: the moment the kernel loads <code>CR3</code> with its own top-level table, the very next instruction fetch is already translated by the new tables. If the kernel hadn’t correctly mapped its own code, that instruction would fault into a triple fault and reset the machine. Surviving the switch <em>is</em> the proof that it mapped itself correctly. It then exposes map/translate/unmap and self-tests them on the serial log.</p>",
      links:[["src/paging.rs","paging.rs"],["src/frame_allocator.rs","frame_allocator.rs"],["docs/concepts/virtual-memory.md","virtual-memory.md (explainer)"]]},
-    {n:"08", ms:"what’s next", title:"You’ve reached the current edge",
-     watch:"This is as far as the OS is built — milestone 7 of 12.",
-     q:"So what turns “a machine that manages its own virtual memory” into “an operating system”?",
-     a:"The next layers: a heap so Rust’s Vec/Box/String work at all, running more than one thing at once (a timer and a scheduler), a shell, and files. Each is a milestone below — and each is meant to be built and understood, not just shipped.",
+    {n:"08", ms:"Milestone 8 · heap", title:"Memory it can grow at runtime",
+     watch:"The “[ok] heap: dynamic allocation (Vec, Box, String) now works” line.",
+     q:"Until now every piece of memory the kernel used was a fixed size, decided in advance. What does a heap add that changes?",
+     a:"Room to allocate memory whose size isn’t known until the program runs. Before this, everything lived on the stack or in static storage — fixed at compile time. A heap is a pool the kernel can carve up on demand, so data structures can grow: a Vec that keeps appending, a String built up character by character, a Box that puts one value on the heap. All of them ask the same allocator for space.",
+     ex:"<p>The kernel reserves a 1 MiB window of virtual address space at 1 GiB, maps its pages onto real frames (this is paging and the frame allocator from the last two milestones doing exactly what they were built for), and installs a linked-list free-list allocator as Rust’s <code>#[global_allocator]</code>. Once that’s in place, the <code>alloc</code> crate lights up and <code>Vec</code>, <code>Box</code>, and <code>String</code> work — with no operating system underneath, because <em>we are</em> the thing they’d normally call.</p><p>The honesty is in reclaim. A bump allocator that only ever hands out the next byte is easy — but it leaks: free something and the space is gone forever. A real allocator takes freed memory back and reuses it, which the self-test proves by allocating, freeing, and watching the same space get handed out again. That difference — reusing freed memory, not just leaking it — is what makes this an allocator and not a counter.</p>",
+     links:[["src/heap.rs","heap.rs"],["docs/concepts/heap.md","heap.md (explainer)"],["src/paging.rs","paging.rs"]]},
+    {n:"09", ms:"what’s next", title:"You’ve reached the current edge",
+     watch:"This is as far as the OS is built — milestone 8 of 12.",
+     q:"So what turns “a machine that can allocate memory dynamically” into “an operating system”?",
+     a:"The next layers: running more than one thing at once (a timer and a scheduler), a shell, and files. Each is a milestone below — and each is meant to be built and understood, not just shipped.",
      ex:"<p>The honest goal of this project isn’t a product; it’s understanding, with a public trail of how it was built — including the dead ends. This page exists so that trail is something you can <em>boot and poke at</em>, not just read. If you take one idea away: an OS is not magic, it’s a stack of small, knowable mechanisms, each of which you can hand-write.</p>",
      links:[["STATUS.md","the milestone tracker"],["docs/blog","the build log"]]}
   ];
@@ -594,8 +605,8 @@ make debug      # boot frozen, attach GDB</code>
     ["5","Keyboard input","done"],
     ["6","Physical memory","done"],
     ["7","Paging / virtual memory","done"],
-    ["8","Heap (Vec, Box, String)","now"],
-    ["9","Timer + scheduling","todo"],
+    ["8","Heap (Vec, Box, String)","done"],
+    ["9","Timer + scheduling","now"],
     ["10","A shell","todo"],
     ["11","Filesystem","todo"],
     ["12","File manager (the goal)","todo"]
