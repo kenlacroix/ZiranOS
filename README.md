@@ -126,7 +126,8 @@ so R2 is optional).
 | M11 filesystem (read) — `ls`/`cat` | ✅ done |
 | M12 **file manager** (end goal) — `cd`/`pwd`/`ls`/`cat`, subdirectories | ✅ **done** |
 | M13 userspace / ring 3 / syscalls — the first privilege boundary | ✅ **done** |
-| M14 networking stub · M15–16 security track (break the boundaries) | ⬜ stretch |
+| M15 break the privilege boundary (security) — flag capture, confused-deputy syscall | ✅ **done** |
+| M14 networking stub · M16 break the filesystem boundary (security) | ⬜ stretch |
 
 ## What happens when it boots
 
@@ -137,7 +138,10 @@ GRUB (Multiboot2)
   → kernel_main (src/lib.rs) banner, then bring up memory, the heap, the timer,
                              a scheduler, and a RAM-disk filesystem tree; drop a
                              program into ring 3 that calls back via `int 0x80`
-                             (M13), then spawn a shell task and idle — a `ziran:/>`
+                             (M13); plant a FLAG on a kernel-only page and let ring 3
+                             attack it — a direct read faults, a syscall without
+                             copy-from-user leaks it, the validated syscall contains
+                             it (M15); then spawn a shell task and idle — a `ziran:/>`
                              prompt you navigate (`help`, `ps`, `mem`, `cd`, `pwd`,
                              `ls`, `cat`)
 ```

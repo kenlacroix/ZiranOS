@@ -243,15 +243,42 @@ theater. Three guards keep us honest:
   blob spuriously faulting — so "returned to ring 0" can't be true unless the blob
   actually ran in ring 3.
 
-## Where this goes next
+## Where this goes next: the confused deputy (Milestone 15)
 
-Milestone 13 builds the jail; the security track breaks into it. **Milestone 15**
-plants a secret in a kernel-only (U/S = 0) page and has a ring-3 program try, in
-earnest, to reach it — turning this milestone's `#PF`-on-`0xb8000` demo into a
-real flag capture. The natural seams to attack are the two this cut deliberately
-left simple: the **syscall argument path** (register-only here; the first *user
-pointer* it accepts is where copy-from-user validation must live) and the **U/S = 0
-identity map** (already the thing that stopped the kernel read).
+Milestone 13 builds the jail; **Milestone 15** breaks into it — and finds the one
+door the CPU can't guard. It plants a `FLAG` on a kernel-only (U/S = 0) page and
+attacks it two ways. The first is a *direct* ring-3 read of the secret's address:
+the CPU faults it (#PF, U/S), exactly as the `0xb8000` demo above — the hardware
+half of the boundary, now aimed at a real secret. That one holds for free.
+
+The second is the lesson. M15 adds the kernel's first *pointer-carrying* syscall,
+`SYS_WRITE(ptr, len)`, which copies bytes from a user buffer to the console. Now a
+ring-3 program can ask the kernel to read `SECRET_VA` **on its behalf** — and the
+kernel runs in ring 0, so when *it* dereferences that pointer, the CPU sees a
+supervisor access and allows it. The ring/page boundary is completely silent. This
+is the **confused deputy**: a privileged agent tricked into misusing its authority
+for a caller who lacks it. The `#PF` that stops ring 3 from reading the page
+directly does nothing when ring 0 reads it voluntarily.
+
+The only defense is *software*: before the deputy acts, it must prove the caller
+could have done the thing itself. That is `copy_from_user` — in Ziran,
+`paging::user_range_ok(ptr, len)`, which walks the page tables (never the memory)
+and requires `PRESENT | USER` at every level of the range, ANDing the U/S bit down
+the walk exactly as the MMU would. M15 ships both the validated `SYS_WRITE` (which
+rejects `SECRET_VA` with `-1`, reading nothing) and a deliberately-broken
+`SYS_WRITE_UNCHECKED` (which skips the walk and leaks the 32 flag bytes) — the same
+attack, one line of validation apart. **The lesson in one sentence: the CPU stops
+*unauthorized access*, but only software stops *authorized misuse*.**
+
+One subtlety the M15 red-team surfaced, worth keeping: validating *permission* is
+not the same as validating *addressability*. The first version of `user_range_ok`
+walked the tables (only bits 0–47) but never checked that the pointer was
+**canonical** — so a pointer with high bits set, whose low 48 bits named a real
+user page, passed the check and then `#GP`'d the *kernel* on the actual
+dereference (a ring-3-triggerable crash, not a leak). A copy-from-user check must
+cover every fault class the eventual deref can raise — #PF *and* #GP — not just the
+one that motivated it. (The `sgdt`/`sidt` info-leak from M13 is still open; closing
+it is `CR4.UMIP`, i.e. hardening — a deliberate non-goal.)
 
 Other threads left open on purpose, each a clean future milestone: folding ring-3
 tasks into the preemptive scheduler (which needs a per-task RSP0 and a way to

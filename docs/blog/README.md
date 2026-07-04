@@ -20,6 +20,7 @@ story is the honest and interesting part — not "it works now."
 | 11 | [Files are just convincing lies about disk layout](11-convincing-lies-about-disk-layout.md) | M11 filesystem (read) | drafted |
 | 12 | [The whole point, arrived at](12-the-whole-point-arrived-at.md) | M12 file manager | drafted |
 | 13 | [The first wall](13-the-first-wall.md) | M13 userspace / ring 3 / syscalls | drafted |
+| 15 | [The confused deputy](15-the-confused-deputy.md) | M15 break the privilege boundary (security) | drafted |
 | ✦ | [What I actually learned building an OS with AI](a-what-i-learned-building-an-os-with-ai.md) | capstone reflection (M0–12) | drafted |
 
 Posts are employer-agnostic and people-agnostic, matching the rest of the blog.
