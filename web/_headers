@@ -1,0 +1,22 @@
+# Cloudflare Pages / Netlify headers for the Ziran OS web tool.
+#
+# The two cross-origin-isolation headers are what let the live qemu-wasm boot run
+# (SharedArrayBuffer needs an isolated context). GitHub Pages can't set these —
+# that's why this project hosts on Cloudflare Pages. Safe to apply site-wide: the
+# tour loads no cross-origin resources (v86 and xterm are self-hosted), so nothing
+# breaks under COEP: require-corp.
+/*
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: require-corp
+  Cross-Origin-Resource-Policy: same-origin
+
+# The big emulator payloads change only on a rebuild — cache them hard. If you
+# rebuild and need clients to refetch, purge the Cloudflare cache (or hard-reload).
+/out.wasm
+  Cache-Control: public, max-age=604800
+/out.data
+  Cache-Control: public, max-age=604800
+/out.worker.js
+  Cache-Control: public, max-age=604800
+/v86.wasm
+  Cache-Control: public, max-age=604800
