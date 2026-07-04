@@ -34,6 +34,7 @@ mod paging;
 mod pic;
 mod port;
 mod serial;
+mod task;
 mod vga_buffer;
 
 // Bounds of the loaded kernel image, defined by `linker.ld`. These are *symbols*,
@@ -144,6 +145,16 @@ pub extern "C" fn kernel_main(multiboot_info_addr: u64) -> ! {
     heap::init();
     heap::self_test();
     println!("[ok] heap: dynamic allocation (Vec, Box, String) now works");
+
+    // Milestone 9 (commit 1): prove the cooperative context switch in isolation,
+    // before any scheduler or timer exists. Create one task on a fresh heap
+    // stack, switch into it, let it print, and have it switch straight back — a
+    // round-trip that exercises switch_context in both directions. Runs while
+    // interrupts are still masked. The fabricated stack's 16-byte alignment is
+    // the thing most likely to triple-fault, so this step is verified under GDB
+    // (see docs/planning/milestone-09-eng-plan.md).
+    task::demo_roundtrip();
+    println!("[ok] task: context switch round-trips (Milestone 9 groundwork)");
 
     // Milestone 5: bring up the keyboard. Remap + mask the PIC first, THEN
     // enable hardware interrupts — doing it in the other order could let a stray
