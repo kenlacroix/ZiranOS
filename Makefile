@@ -84,7 +84,7 @@ ifeq ($(PROFILE),debug)
     CARGO_FLAGS :=
 endif
 
-.PHONY: all iso run console run-headless debug gdb clean check-header web serve web-test
+.PHONY: all iso run console run-headless debug gdb clean check-header web serve web-test deploy-web
 
 all: $(KERNEL)
 
@@ -187,6 +187,18 @@ serve: web
 # waits for the ziran:/> prompt, drives `ps`. The check native -kernel can't do.
 web-test:
 	python3 web/browser-test.py
+
+# Publish the web tool to Cloudflare Pages via *direct upload*. This uploads the
+# whole web/ directory as it sits on disk — crucially including the gitignored
+# qemu-wasm assets (out.js, qemu-system-x86_64.*, load.js, vendor/, kernel-v86.bin)
+# that a git-connected Pages deploy can never see (that's why /qemu-wasm renders
+# but doesn't boot). The built wasm is < 25 MiB, so no R2 is needed. Requires Node
+# and a one-time `wrangler login`. Override the project with CF_PAGES_PROJECT=name.
+# See docs/DEPLOY.md.
+CF_PAGES_PROJECT ?= ziranos
+deploy-web:
+	@test -f web/qemu-system-x86_64.wasm || { echo "missing web/qemu-system-x86_64.wasm -- run ./web/build-qemu-wasm.sh first"; exit 1; }
+	npx wrangler pages deploy web --project-name=$(CF_PAGES_PROJECT)
 
 clean:
 	cargo clean
