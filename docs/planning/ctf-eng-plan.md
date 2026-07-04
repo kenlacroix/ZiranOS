@@ -300,6 +300,41 @@ QEMU (per-connection, ephemeral)  →  ziran kernel, serial only
   cleanly, a hung guest is killed on timeout, the concurrency cap holds, and a
   flood is rate-limited before it exhausts the host.
 
+### 3.6 Capture detection & recognition (*not* a scoreboard)
+
+The flag is already a sentinel (`FLAG{…}`), so "was it captured?" is answerable —
+but the mechanism, and how much recognition to build around it, differs by tier
+and is where the "no CTF platform" scope line (§2) gets tested.
+
+- **Tier 1 (white-box) — cosmetic, client-side.** There is nothing to judge
+  server-side; the flag prints in the visitor's own tab. If a satisfying "you got
+  it" is wanted, the page watches the serial stream for the `FLAG{…}` regex and
+  shows a confirmation. It's a sandbox, not a judge — keep it honest about that.
+- **Tier 2 (real capture) — submit-to-verify.** The player submits the captured
+  string to a verifier that checks equality. The design fork:
+  - **Static flag + submit box** — one secret, paste-to-verify. Simple, but the
+    moment someone publishes it, everyone can "capture" it (standard CTF leakage).
+  - **Per-session unique flags** — the bridge plants a distinct flag per
+    connection/token, so a valid flag *proves that player* captured it and can't
+    be copied from a writeup. This is the *only* version where a scoreboard would
+    mean anything.
+
+**Ruling: no competitive scoreboard.** A real leaderboard implies a platform —
+accounts, persistence, anti-cheat, unique flags, moderation of a public writable
+service — which is exactly the "no CTF platform" deferral in §2. It is a large,
+ongoing abuse/maintenance liability for little portfolio payoff. Build it only if
+this becomes an actual event with demonstrated demand; never speculatively.
+
+**Recognition that fits a solo portfolio instead:**
+- **Solvers submit a writeup as a GitHub issue/PR**, and the repo keeps a
+  `SOLVERS.md` hall-of-fame (manual, or CI-appended). This beats a scoreboard for
+  these goals: a writeup proves *understanding* rather than flag-copying, it
+  generates repo activity (issues/PRs feed GitHub trending), and it is the kind of
+  artifact that impresses an engineer reading the repo. Ship an issue template to
+  shape submissions.
+- Optionally a dumb **solve counter** ("N captures so far") — social proof with
+  zero accounts. Keep unique-flag identity out unless/until a scoreboard is real.
+
 ---
 
 ## 4. Tier-2 deployment & isolation (the "can they reach my LAN?" answer)
@@ -362,13 +397,15 @@ reasoning for the price of a coffee.
    uploaded image at `/mnt`. Self-test: load a known-good image, `ls`/`cat` it;
    load malformed images, assert clean rejection (the ten still hold).
 2. **The white-box challenge page** under `web/`: live boot + paste/load UI +
-   spoiler-gated walkthrough, honest "this is a sandbox" framing. Manual browser
-   verify: craft an aliasing image, capture the seeded flag in-tab.
+   spoiler-gated walkthrough, honest "this is a sandbox" framing + client-side
+   capture detection (watch serial for `FLAG{…}` → confirmation, §3.6). Manual
+   browser verify: craft an aliasing image, capture the seeded flag in-tab.
 3. **CI self-test** asserting the in-image alias leaks the planted flag and that
    the corrupt-image rejections are intact. Marker bump.
-4. Docs: fold into the M16 blog post / `docs/concepts/filesystem.md`; note the
-   loose-check gap explicitly. `/red-team` applies here — the FS boundary now has
-   a live attacker path.
+4. Docs + recognition: fold into the M16 blog post / `docs/concepts/filesystem.md`;
+   note the loose-check gap explicitly. Add `SOLVERS.md` + a solver-writeup issue
+   template (§3.6). `/red-team` applies here — the FS boundary now has a live
+   attacker path.
 
 **Phase B — Tier 2 (gate on: Phase A shipped + a decision it's worth the ops):**
 5. **The trusted-length OOB read.** Engineer the flag-adjacent allocation and the
@@ -396,3 +433,36 @@ reasoning for the price of a coffee.
 - **PLAN §1 non-goal (networking):** Tier 2 requires the explicit §2 decision
   recorded in PLAN §8 before build — the kernel stays networkless; the network is
   host-side delivery infra only.
+
+---
+
+## 7. Launch / go-live gates (HN, r/rust, r/osdev, lobste.rs, TWiR)
+
+Getting this in front of people is worth doing, but the *timing and hook* matter
+more than the decision. This section is the checklist that keeps a launch from
+firing before there's something to click — or before the target can survive being
+clicked.
+
+**The hook is the live artifact, never "I wrote an OS."** Show HN rewards a verb
+the reader can do: *"Steal a flag from my from-scratch 64-bit OS — it boots in
+your browser tab."* Lead with the demo link, not the repo.
+
+**Realistic expectations.** Even a strong Show HN is a coin flip to front-page;
+the qemu-wasm-CTF angle is unusually good for the genre, but the *durable* win is
+the artifact + the writeups, independent of whether the spike lands. You get
+roughly one good shot per artifact — space them, don't spend them all at once.
+
+**Go-live gates (ordered — do not skip):**
+1. **The qemu-wasm demo is publicly hosted** with the COOP/COEP headers
+   (`docs/DEPLOY.md`, the current blocker). Nothing lands until someone can click
+   and boot. This gates *everything* below.
+2. **Tier 1 challenge page is live** with capture detection working (§3.6). This
+   is the minimum viable Show HN.
+3. **(If Tier 2 is in the launch)** isolation verified (§4), rate-limit/concurrency
+   caps load-tested, and the instance on a **disposable VPS, not the homelab** — a
+   front-page HN crowd *will* try to break out and dump wasm memory on purpose, so
+   these are hard gates, not nice-to-haves.
+4. **Writeup + recognition ready:** the blog post, `SOLVERS.md`, and the
+   solver-writeup issue template (§3.6) in place *before* traffic arrives.
+5. **Post** Show HN on a weekday US morning; stagger r/rust, r/osdev, lobste.rs,
+   and a This Week in Rust submission over following days rather than same-day.
