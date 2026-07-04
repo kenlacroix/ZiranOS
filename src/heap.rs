@@ -20,10 +20,13 @@
 //! allocator was rejected for the same reason M6 rejected one — it cannot free an
 //! individual allocation, so it leaks every `Vec` reallocation. This one reclaims.
 //!
-//! Honest limitation, documented as the later-refinement hook: `alloc` is
-//! first-fit and `dealloc` does **not** coalesce adjacent free regions, so
-//! fragmentation can accumulate. Merging neighbours is the natural next step (what
-//! a production free list does), deferred here.
+//! Two honest limitations, both later-refinement hooks — neither corrupts memory,
+//! both merely waste it: (1) `dealloc` does **not** coalesce adjacent free regions,
+//! so fragmentation can accumulate; and (2) an over-aligned request (align > 16)
+//! leaks the small front-padding gap it skips to reach an aligned start — those
+//! bytes are not re-listed. In this kernel real alignments are ≤ 16 off a
+//! 1 GiB-aligned heap base, so the front gap is almost always zero. Merging
+//! neighbours and recovering the front gap are what a production free list adds.
 
 use crate::{frame_allocator, paging};
 use core::alloc::{GlobalAlloc, Layout};
@@ -43,7 +46,9 @@ const PAGE_SIZE: u64 = 4096;
 
 /// Round `addr` up to a multiple of `align`. Valid only because `align` is a
 /// power of two (`Layout` guarantees it): clearing the low bits rounds down, so
-/// biasing by `align - 1` first rounds up.
+/// biasing by `align - 1` first rounds up. The `addr + align - 1` add is
+/// unchecked, which is sound only because our heap addresses are ~1 GiB and
+/// `align` is a `Layout` power of two — the sum cannot wrap `usize`.
 fn align_up(addr: usize, align: usize) -> usize {
     (addr + align - 1) & !(align - 1)
 }
@@ -160,7 +165,11 @@ impl FreeListHeap {
     fn dealloc(&mut self, ptr: *mut u8, layout: Layout) {
         let (size, _) = size_align(layout);
         // Reclaim: thread a fresh node through the returned block. This is what a
-        // bump allocator cannot do — the freed bytes become reusable.
+        // bump allocator cannot do — the freed bytes become reusable. We do NOT
+        // detect a double free: the GlobalAlloc contract forbids it, and checking
+        // would cost an O(n) list scan on every free. A violation would splice the
+        // block into the list twice, forming a cycle rather than failing loudly —
+        // one more reason the contract must be trusted.
         // SAFETY: `ptr`/`layout` came from this allocator (caller's contract), so
         // `[ptr, ptr+size)` is a node-sized, node-aligned block we own.
         unsafe { self.add_free_region(ptr as usize, size) };

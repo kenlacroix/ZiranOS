@@ -98,9 +98,12 @@ Vec::push / Box::new  ->  __rust_alloc  ->  <LockedHeap as GlobalAlloc>::alloc
    -> lock the Mutex -> first-fit find_region -> split -> return aligned ptr (or null)
 drop  ->  __rust_dealloc  ->  ::dealloc  -> add_free_region (reclaim)
 ```
-The 256 pages all fall in `[1 GiB, 1 GiB+2 MiB)`, so `map_page` allocates exactly
-one PD + one PT (shared by all 256) plus the 256 heap frames — 258 frames total,
-reported at init.
+The 256 pages all fall in `[1 GiB, 1 GiB+2 MiB)`, sharing one PD and one PT. M7's
+self-test already mapped-then-leaked exactly those two intermediate tables (it
+mapped `0x4000_0000`, and `unmap_page` clears only the leaf), so `heap::init`
+finds them present and allocates just the **256 heap frames** — M7's documented
+"leak" is quietly reused here. (If the tables weren't there, `map_page` would
+create them; init works either way.)
 
 ## 4. Edge cases
 
