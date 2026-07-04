@@ -16,5 +16,6 @@ story is the honest and interesting part — not "it works now."
 | 07 | [The illusion of memory](07-the-illusion-of-memory.md) | M7 paging | drafted |
 | 08 | [Room to grow](08-room-to-grow.md) | M8 heap | drafted |
 | 09 | [Multiple things at once, sort of](09-multiple-things-at-once.md) | M9 timer + scheduling | drafted |
+| 10 | [It has a prompt now](10-it-has-a-prompt-now.md) | M10 simple shell | drafted |
 
 Posts are employer-agnostic and people-agnostic, matching the rest of the blog.

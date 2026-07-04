@@ -28,11 +28,14 @@ reads the Multiboot2 memory map to stand up a bitmap **physical-frame allocator*
 over usable RAM (alloc, free, and reclaim), builds its own **page tables** —
 switching `CR3` off the boot map to virtual memory it controls (`map`/`translate`/
 `unmap`) — stands up a **heap** so Rust's `Vec`, `Box`, and `String` work, and
-now drives a **preemptive scheduler**: a 100 Hz PIT timer interrupt hands the CPU
-between tasks, so two tasks that never yield are still interleaved (a task is
-just a saved stack pointer, switched by hand-written assembly). That covers
-milestones 1–9. Everything assembles, compiles, and links on stable Rust; CI
-boots the image under headless QEMU on every push.
+drives a **preemptive scheduler** — a 100 Hz PIT timer interrupt hands the CPU
+between tasks, so two tasks that never yield are still interleaved (a task is just
+a saved stack pointer, switched by hand-written assembly) — and now runs an
+interactive **shell** as one of those tasks: the keyboard interrupt drops
+keystrokes into a lock-free ring, and the shell drains it to run `help`, `echo`,
+`clear`, `mem`, and `ps`. That covers milestones 1–10. Everything assembles,
+compiles, and links on stable Rust; CI boots the image under headless QEMU on
+every push.
 
 New here? Start with the plain-language explainers in
 [`docs/concepts/`](docs/concepts/) — e.g. [interrupts](docs/concepts/interrupts.md),
@@ -53,7 +56,8 @@ serve `web/`).
 | M7 paging / virtual memory | ✅ done |
 | M8 heap (`Vec`, `Box`, `String`) | ✅ done |
 | M9 timer + preemptive scheduling | ✅ done |
-| M10+ shell, filesystem, file manager | ⬜ next |
+| M10 interactive shell | ✅ done |
+| M11+ filesystem, file manager | ⬜ next |
 
 ## What happens when it boots
 
@@ -62,7 +66,8 @@ GRUB (Multiboot2)
   → boot/boot.asm            32-bit: verify CPU, build page tables, enter long mode
   → boot/long_mode_init.asm  64-bit: load segments, call into Rust
   → kernel_main (src/lib.rs) banner, then bring up memory, the heap, the timer,
-                             and a scheduler — two tasks share the CPU — then idle
+                             and a scheduler, then spawn a shell task and idle —
+                             a `ziran>` prompt you can type at
 ```
 
 Every step is readable and hand-written; there is no `bootimage`/`build.rs`
@@ -93,6 +98,7 @@ src/                    the no_std Rust kernel
   heap.rs                 the free-list heap behind #[global_allocator]
   pit.rs                  8254 PIT: the periodic 100 Hz timer (IRQ0)
   task.rs                 tasks, the context switch, the round-robin scheduler
+  shell.rs                the interactive shell, run as a scheduler task
 linker.ld               places the Multiboot header first, kernel at 1 MiB
 grub/grub.cfg           one-entry GRUB menu for the bootable ISO
 Makefile                the whole build/run/debug pipeline, spelled out
