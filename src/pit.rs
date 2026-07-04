@@ -36,7 +36,15 @@ static TICKS: AtomicU64 = AtomicU64::new(0);
 /// The divisor is `PIT_FREQ_HZ / target_hz`; the actual rate is
 /// `PIT_FREQ_HZ / divisor`, exact to well under a percent at the rates we use.
 pub fn init(target_hz: u32) {
-    let divisor = (PIT_FREQ_HZ / target_hz) as u16;
+    debug_assert!(target_hz != 0, "pit::init: target_hz must be non-zero");
+
+    // The divisor is a 16-bit reload value, and the chip reads a written 0 as
+    // 65536 (the slowest rate). Clamp so a future caller outside the sane band
+    // (≤ 18 Hz would overflow 16 bits; 0 Hz would divide by zero) fails sane
+    // rather than silently programming a garbage rate. Only `init(100)` is used
+    // today, where `divisor_full` is 11931 (→ ~100.006 Hz).
+    let divisor_full = (PIT_FREQ_HZ / target_hz.max(1)).clamp(1, 0x1_0000);
+    let divisor = divisor_full as u16; // 0x1_0000 wraps to 0, which the PIT reads as 65536
 
     // SAFETY: this is the architecturally-fixed PIT programming sequence. The
     // command byte 0x34 = channel 0, lo/hi-byte access, mode 2 (rate generator —
@@ -51,8 +59,8 @@ pub fn init(target_hz: u32) {
 
     crate::serial_println!(
         "[ok] timer: PIT channel 0 at ~{} Hz (divisor {})",
-        PIT_FREQ_HZ / divisor as u32,
-        divisor
+        PIT_FREQ_HZ / divisor_full,
+        divisor_full
     );
 }
 

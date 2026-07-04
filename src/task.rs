@@ -38,6 +38,15 @@ extern "C" {
 
 /// Per-task kernel stack size: 16 KiB, matching the boot stack. Heap-allocated
 /// (Milestone 8), so a handful of tasks fit comfortably in the 1 MiB heap.
+///
+/// Known limitation, in the same spirit as the heap's documented limits: these
+/// stacks have **no guard page**. An overflow writes downward past the
+/// allocation into an adjacent heap object and faults nothing — silent
+/// corruption, not a clean trap. Budget for it under preemption: a timer IRQ
+/// pushes a full `InterruptContext` (~136 bytes) plus the `interrupt_dispatch`
+/// → `preempt` → `yield_now` → `switch_context` chain onto whichever task stack
+/// is running, on top of the task's own use. A real guard page needs an unmapped
+/// page below each stack (per-stack M7 paging) — a future refinement.
 const STACK_SIZE: usize = 16 * 1024;
 
 /// The idle task's index. `kernel_main` is registered here; it is never placed
@@ -142,19 +151,29 @@ impl Scheduler {
 static SCHED: Mutex<Option<Scheduler>> = Mutex::new(None);
 
 /// Install the scheduler with `kernel_main` as the idle task. Call once, after
-/// the heap is up.
+/// the heap is up. Interrupt-safe: clears IF around the lock so a timer tick can
+/// never re-enter the scheduler (via `preempt`) while this holds `SCHED`.
 fn init() {
+    let flags = interrupts::save_and_disable();
     *SCHED.lock() = Some(Scheduler::with_idle());
+    interrupts::restore(flags);
 }
 
-/// Create a task and enqueue it as ready. Returns its id.
+/// Create a task and enqueue it as ready. Returns its id. Interrupt-safe for the
+/// same reason as [`init`] — a plain `SCHED.lock()` here with interrupts enabled
+/// would deadlock if the timer preempted mid-critical-section.
 fn spawn(entry: extern "C" fn()) -> u64 {
-    let mut guard = SCHED.lock();
-    let sched = guard.as_mut().expect("task::spawn before init");
-    let idx = sched.tasks.len();
-    let id = idx as u64;
-    sched.tasks.push(Task::new(id, entry));
-    sched.ready.push_back(idx);
+    let flags = interrupts::save_and_disable();
+    let id = {
+        let mut guard = SCHED.lock();
+        let sched = guard.as_mut().expect("task::spawn before init");
+        let idx = sched.tasks.len();
+        let id = idx as u64;
+        sched.tasks.push(Task::new(id, entry));
+        sched.ready.push_back(idx);
+        id
+    };
+    interrupts::restore(flags);
     id
 }
 
@@ -207,10 +226,14 @@ pub fn yield_now() {
 
     if let Some((old_sp_ptr, new_sp)) = switch {
         // SAFETY: `old_sp_ptr` points at the outgoing task's `saved_sp` inside the
-        // scheduler's `Vec`, which is stable (we never spawn mid-switch); `new_sp`
-        // is the incoming task's parked stack, fabricated by `Task::new` or
-        // written by a prior `switch_context`. The lock is released, so the
-        // resumed task may re-enter the scheduler freely.
+        // scheduler's `Vec`. It stays valid across the switch for two reasons:
+        // `switch_context` writes `*old_sp` *before* loading the new stack (still
+        // on the outgoing task, before any other task can run), and this whole
+        // window runs with IF=0, so no reentrant `spawn` can reallocate the `Vec`
+        // underneath it on this single core. `new_sp` is the incoming task's
+        // parked stack, fabricated by `Task::new` or written by a prior
+        // `switch_context`. The lock is released, so the resumed task may re-enter
+        // the scheduler freely.
         unsafe { switch_context(old_sp_ptr, new_sp) };
     }
 

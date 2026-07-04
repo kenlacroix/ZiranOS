@@ -163,9 +163,11 @@ pub extern "C" fn kernel_main(multiboot_info_addr: u64) -> ! {
     pic::init();
     serial_println!("Ziran OS: PIC remapped, timer + keyboard IRQs unmasked.");
 
-    // Milestone 9b: program the periodic timer BEFORE enabling interrupts, so the
-    // first IRQ0 arrives at our chosen 100 Hz rather than the PIT's power-on
-    // 18.2 Hz default.
+    // Milestone 9b: program the periodic timer BEFORE the `sti` below. IRQ0 was
+    // just unmasked at the PIC, but interrupts are still disabled (IF=0), so any
+    // tick from the PIT's power-on 18.2 Hz default merely latches pending in the
+    // PIC and is not delivered. By the time `sti` lets it through, the divisor is
+    // set, so the first IRQ0 we actually take is at our chosen 100 Hz.
     pit::init(100);
 
     println!();

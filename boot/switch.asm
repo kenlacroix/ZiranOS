@@ -26,7 +26,10 @@ bits 64
 ; an ordinary `call`, the compiler has already spilled the *caller*-saved
 ; registers around the call site, and the return address is already on the
 ; stack. So we save only the six *callee*-saved registers plus the stack pointer
-; itself -- that is the entire machine state a cooperative switch must preserve.
+; itself -- that is the entire integer machine state a cooperative switch must
+; preserve *on this soft-float target* (SSE/MMX are off; see .cargo/config.toml).
+; If SSE/x87 were ever enabled, MXCSR and the x87 control word are also callee-
+; saved and a switch that runs FP code would have to carry them too.
 switch_context:
     push rbp
     push rbx
