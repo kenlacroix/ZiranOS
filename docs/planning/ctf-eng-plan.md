@@ -335,6 +335,50 @@ this becomes an actual event with demonstrated demand; never speculatively.
 - Optionally a dumb **solve counter** ("N captures so far") — social proof with
   zero accounts. Keep unique-flag identity out unless/until a scoreboard is real.
 
+### 3.7 Flag provenance & anti-cheat (git history, hashing, misdirection)
+
+The repo is public, so a committed flag is **not a secret**: `git grep`, `git log
+-p`, and GitHub code search find it instantly, and git history is *permanent*
+(deleting the line later does not remove it from history). The same bytes also sit
+in the compiled binary (`strings`), the wasm, and live memory — so "in the repo" is
+just one of four leak surfaces for any client-side flag. The rules that follow:
+
+- **Never commit the real (Tier-2) flag.** It is injected server-side at spawn from
+  a deploy secret (env var / secret store), lives only in the instance's RAM, and is
+  never written to a repo-tracked file. Then git history is a non-issue *by
+  construction* — there is nothing committed to find. This is the same principle as
+  §0/§3.3: the secret must live outside anything the player is handed.
+- **The committed `FLAG{…}` is the Tier-1 practice fixture, and is public.** Treat
+  it as burned. It is fine for the white-box sandbox (whose flag was never meant to
+  be secret); it must never be reused as the Tier-2 capture flag.
+- **Verify by hash, not by the flag.** The submit-box verifier stores
+  `sha256(flag)`, never the flag. A hash can't be reversed, so the repo *and* the
+  verifier logic can both be fully public while the secret stays underivable. (For
+  per-session flags, relate the stored hash to the issued token.)
+
+**On hiding — obfuscation vs. misdirection.** Neither protects a client-side
+secret; both are speed-bumps. The architecture above (server-side secret +
+hash-verify) is the only real wall. But they are not equal:
+
+- **Obfuscation — don't.** Transforming the flag (XOR/encode/split/compress) is
+  security-through-obscurity, and AI makes deobfuscation *easier*, not harder — LLMs
+  reverse base64/hex/XOR/rot on sight. Using "AI obfuscation" to hide from AI is an
+  arms race against the tool best at un-hiding. Skip it.
+- **Misdirection as *detection* — do, sparingly.** Plant a **honeytoken**: a decoy
+  `FLAG{…}` in the obvious places (committed to the repo, or an easily-dumped memory
+  region). Submitting the honeytoken *proves* the submitter took the shortcut —
+  grepped the repo, dumped wasm memory — instead of landing the real exploit. Reject
+  it **and log the attempt**. This is a tripwire: it yields *signal*, not secrecy. A
+  solver who actually exploits gets the real flag regardless of how many decoys sit
+  around it. This is the one genuinely useful anti-cheat here.
+- **Misdirection as *puzzle craft* — optional.** Several unlisted regions on the
+  disk, only one the real target, so the exploit requires understanding the layout
+  rather than a lucky grep. Improves the *challenge*; not a security control.
+
+**Ordering (do not invert):** architecture is the wall (server-side secret +
+hash-verify); a honeytoken is the tripwire on top of it. Never let a speed-bump —
+obfuscation or misdirection — substitute for the wall.
+
 ---
 
 ## 4. Tier-2 deployment & isolation (the "can they reach my LAN?" answer)
@@ -462,7 +506,12 @@ roughly one good shot per artifact — space them, don't spend them all at once.
    caps load-tested, and the instance on a **disposable VPS, not the homelab** — a
    front-page HN crowd *will* try to break out and dump wasm memory on purpose, so
    these are hard gates, not nice-to-haves.
-4. **Writeup + recognition ready:** the blog post, `SOLVERS.md`, and the
+4. **(If Tier 2) flag hygiene (§3.7):** the real flag is a **deploy-time secret,
+   never committed**; the verifier stores only `sha256(flag)`; the committed
+   `FLAG{…}` is a burned practice fixture; a honeytoken is wired to detect
+   grep/memory-dump shortcuts. A public repo posted to HN gets its history scraped
+   within minutes — this gate is what makes that harmless.
+5. **Writeup + recognition ready:** the blog post, `SOLVERS.md`, and the
    solver-writeup issue template (§3.6) in place *before* traffic arrives.
-5. **Post** Show HN on a weekday US morning; stagger r/rust, r/osdev, lobste.rs,
+6. **Post** Show HN on a weekday US morning; stagger r/rust, r/osdev, lobste.rs,
    and a This Week in Rust submission over following days rather than same-day.
