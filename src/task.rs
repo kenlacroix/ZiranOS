@@ -173,6 +173,15 @@ pub fn init() {
 /// Create a task and enqueue it as ready. Returns its id. Interrupt-safe for the
 /// same reason as [`init`] — a plain `SCHED.lock()` here with interrupts enabled
 /// would deadlock if the timer preempted mid-critical-section.
+///
+/// Latent invariant (safe in M9/M10, revisit when more allocating tasks appear):
+/// this allocates the new task's stack, and `tasks.push`/`ready.push_back` may
+/// grow their `Vec`/`VecDeque`, all while holding `SCHED` with IF=0. That can only
+/// deadlock if *another* task is preempted mid-`alloc` holding the heap lock. All
+/// current callers `spawn` during setup, before any such task exists, so it is
+/// safe today — but a future milestone that spawns tasks at runtime, concurrently
+/// with other allocating tasks, must make this allocation-free first (as
+/// [`snapshot`] already is). See `docs/planning/milestone-10-eng-plan.md`.
 pub fn spawn(entry: extern "C" fn()) -> u64 {
     let flags = interrupts::save_and_disable();
     let id = {
@@ -189,25 +198,37 @@ pub fn spawn(entry: extern "C" fn()) -> u64 {
 }
 
 /// A read-only snapshot of the scheduler for the shell's `ps`: `(id, state,
-/// is_current)` per task. Taken under the interrupt-safe discipline — clear IF,
-/// lock, copy into a `Vec`, unlock, restore — so the caller prints it *after* the
-/// lock is released. Printing while holding `SCHED` would let the 100 Hz timer's
-/// `preempt` deadlock on the lock. Allocating the `Vec` under the lock is fine:
-/// the heap lock is independent of `SCHED`.
+/// is_current)` per task, current-task marked. The caller prints it *after* this
+/// returns — printing while holding `SCHED` would let the 100 Hz timer's
+/// `preempt` deadlock on the lock.
+///
+/// The task table is copied into a fixed stack array *under* the lock and the
+/// `Vec` is built only *after* the lock is released and interrupts restored. That
+/// keeps the IF=0/`SCHED` critical section **allocation-free**: allocating while
+/// holding `SCHED` with interrupts off could deadlock against a task that was
+/// preempted mid-`alloc` holding the heap lock — with IF cleared, that task can
+/// never be rescheduled to release it. A teaching kernel never has more than
+/// `MAX` tasks; any beyond it are simply omitted from `ps`.
 pub fn snapshot() -> Vec<(u64, State, bool)> {
-    let flags = interrupts::save_and_disable();
-    let snap = {
-        let guard = SCHED.lock();
-        let sched = guard.as_ref().expect("task::snapshot before init");
-        sched
-            .tasks
-            .iter()
-            .enumerate()
-            .map(|(i, t)| (t.id, t.state, i == sched.current))
-            .collect()
+    const MAX: usize = 64;
+    let mut tmp = [(0u64, State::Ready, false); MAX];
+
+    let n = {
+        let flags = interrupts::save_and_disable();
+        let n = {
+            let guard = SCHED.lock();
+            let sched = guard.as_ref().expect("task::snapshot before init");
+            let n = sched.tasks.len().min(MAX);
+            for (i, t) in sched.tasks.iter().take(MAX).enumerate() {
+                tmp[i] = (t.id, t.state, i == sched.current);
+            }
+            n
+        }; // guard dropped
+        interrupts::restore(flags);
+        n
     };
-    interrupts::restore(flags);
-    snap
+
+    tmp[..n].to_vec() // allocates after the lock is released, with interrupts on
 }
 
 /// Hand the CPU to the next runnable task. Picks the next ready task (falling

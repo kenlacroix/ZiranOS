@@ -135,8 +135,9 @@ fn translate(code: u8, shift: bool) -> Option<char> {
 // really forbids *compiler* reordering — there is no second core to race — but the
 // Acquire/Release pair states the contract correctly regardless.
 
-/// Ring capacity (power of two). 256 bytes is far more backlog than a human
-/// typist can build against a shell that drains every timer tick.
+/// Ring capacity. One slot is always kept empty to tell "full" from "empty"
+/// apart, so 256 gives 255 bytes of usable backlog — far more than a human typist
+/// can build against a shell that drains every timer tick.
 const RING_CAP: usize = 256;
 
 /// The ring storage. One `AtomicU8` per slot; the index ordering fences them, so

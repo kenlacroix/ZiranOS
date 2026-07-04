@@ -253,6 +253,9 @@ pub extern "C" fn interrupt_dispatch(ctx: &InterruptContext) {
         // can never spin on a lock a preempted task is holding mid-print.
         KEYBOARD_VECTOR => {
             if let Some(c) = keyboard::handle_interrupt() {
+                // `translate` only ever yields ASCII, so this cast never truncates;
+                // assert it so a future non-ASCII mapping fails loudly, not silently.
+                debug_assert!(c.is_ascii(), "keyboard: non-ASCII char would truncate in the ring");
                 keyboard::push(c as u8);
             }
             pic::send_eoi(1);

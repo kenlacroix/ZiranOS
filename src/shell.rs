@@ -10,9 +10,12 @@
 //!
 //! When its ring is empty the shell executes `hlt` rather than spinning or
 //! `yield_now`-ing: with only the shell and the idle task runnable, `yield_now`
-//! would no-op and a spin would peg the core, whereas `hlt` sleeps the CPU until
-//! the next interrupt — a keystroke wakes it at once, the 100 Hz timer at worst
-//! ~10 ms later. See `docs/concepts/input-and-shell.md`.
+//! would just bounce to idle and back every tick and a spin would peg the core,
+//! whereas `hlt` sleeps the CPU until the next interrupt. If the shell is the
+//! current task its keystroke IRQ wakes it at once; if a tick has parked it and
+//! made idle current, the byte waits in the ring until the next tick reschedules
+//! the shell — bounded by the 100 Hz period, never lost. See
+//! `docs/concepts/input-and-shell.md`.
 
 use crate::keyboard;
 use crate::{interrupts, print, println, serial_println};
@@ -104,9 +107,11 @@ enum Command<'a> {
     Unknown(&'a str),
 }
 
-/// Split a line into a command and its argument tail. The first whitespace-run
-/// separates the verb from the rest; the rest is preserved verbatim (only its
-/// leading space trimmed), so `echo` reprints spacing faithfully.
+/// Split a line into a command and its argument tail. The whole line is trimmed
+/// first (so leading and trailing whitespace are dropped), then the first
+/// whitespace-run separates the verb from the rest. Internal spacing in the tail
+/// is preserved, so `echo a  b` keeps its double space; trailing spaces do not
+/// survive (`echo` cannot emit them).
 fn parse(line: &str) -> Command<'_> {
     let line = line.trim();
     if line.is_empty() {
@@ -247,9 +252,11 @@ pub fn self_test() {
     // The input ring (the milestone's crux) round-trips FIFO. Guard with
     // interrupts off so the real keyboard IRQ — the only other producer — cannot
     // push concurrently and break the single-producer contract during the test.
-    // Nothing has been typed yet, so the ring starts empty.
+    // Interrupts have been live since `sti`, so a key pressed earlier in boot may
+    // already sit in the ring; drain it first rather than assert emptiness (which
+    // a stray keystroke would fail), then test the bytes this test itself pushes.
     let flags = interrupts::save_and_disable();
-    assert_eq!(keyboard::pop(), None, "shell: input ring not empty at boot");
+    while keyboard::pop().is_some() {}
     keyboard::push(b'x');
     keyboard::push(b'y');
     assert_eq!(keyboard::pop(), Some(b'x'), "shell: input ring not FIFO");
