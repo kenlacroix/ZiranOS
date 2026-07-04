@@ -20,13 +20,12 @@
 
 use crate::keyboard;
 use crate::{interrupts, print, println, serial_println};
+use alloc::string::String;
+use alloc::vec::Vec;
 
 /// Maximum length of one input line. Fixed and heapless: a longer line simply
 /// stops accepting printable characters (no wrap, no reallocation).
 const LINE_MAX: usize = 128;
-
-/// The prompt, reprinted after every line.
-const PROMPT: &str = "ziran> ";
 
 /// The shell's editable input line — a fixed byte buffer, all ASCII.
 struct Line {
@@ -105,7 +104,9 @@ enum Command<'a> {
     Clear,
     Mem,
     Ps,
-    Ls,
+    Pwd,
+    Cd(&'a str),
+    Ls(&'a str),
     Cat(&'a str),
     Unknown(&'a str),
 }
@@ -130,15 +131,18 @@ fn parse(line: &str) -> Command<'_> {
         "clear" => Command::Clear,
         "mem" => Command::Mem,
         "ps" => Command::Ps,
-        "ls" => Command::Ls,
-        // A filename has no spaces, so take just the first token of the tail.
+        "pwd" => Command::Pwd,
+        // A path has no spaces in this FS, so take just the first token of the tail.
+        "cd" => Command::Cd(rest.split_whitespace().next().unwrap_or("")),
+        "ls" => Command::Ls(rest.split_whitespace().next().unwrap_or("")),
         "cat" => Command::Cat(rest.split_whitespace().next().unwrap_or("")),
         other => Command::Unknown(other),
     }
 }
 
-/// Run a completed line. Output goes to the VGA console (the human's screen).
-fn dispatch(line: &str) {
+/// Run a completed line against the current working directory. Output goes to the
+/// VGA console (the human's screen). Only `cd` mutates `cwd`.
+fn dispatch(cwd: &mut String, line: &str) {
     match parse(line) {
         Command::Empty => {}
         Command::Help => {
@@ -148,15 +152,19 @@ fn dispatch(line: &str) {
             println!("  clear         clear the screen");
             println!("  mem           show memory usage");
             println!("  ps            list tasks");
-            println!("  ls            list files");
-            println!("  cat <file>    print a file");
+            println!("  pwd           print the working directory");
+            println!("  cd [path]     change directory (no arg -> /)");
+            println!("  ls [path]     list a directory (default: cwd)");
+            println!("  cat <path>    print a file");
         }
         Command::Echo(rest) => println!("{rest}"),
         Command::Clear => crate::vga_buffer::clear_screen(),
         Command::Mem => cmd_mem(),
         Command::Ps => cmd_ps(),
-        Command::Ls => cmd_ls(),
-        Command::Cat(name) => cmd_cat(name),
+        Command::Pwd => cmd_pwd(cwd),
+        Command::Cd(p) => cmd_cd(cwd, p),
+        Command::Ls(p) => cmd_ls(cwd, p),
+        Command::Cat(p) => cmd_cat(cwd, p),
         Command::Unknown(verb) => println!("unknown command: {verb} (try help)"),
     }
 }
@@ -185,9 +193,72 @@ fn cmd_ps() {
     }
 }
 
-/// `ls` — list the RAM disk's files with sizes. Mounts the image fresh each time
-/// (it is ~150 bytes and stateless, so there is nothing to cache).
-fn cmd_ls() {
+/// Join `arg` onto `cwd` and normalize `.`/`..`/`//` into a canonical absolute
+/// path. `cwd` must already be canonical (leading `/`). **Pure — no I/O** — so
+/// `..` is a `Vec::pop`, never a disk parent-pointer walk, and the whole thing is
+/// unit-testable. The result is always canonical: leading `/`, no `.`/`..`, and no
+/// trailing slash except the root, which is `"/"`.
+fn canonicalize(cwd: &str, arg: &str) -> String {
+    let mut stack: Vec<&str> = Vec::new();
+    // An absolute arg ignores cwd; a relative one starts from it.
+    let base = if arg.starts_with('/') { "" } else { cwd };
+    for part in base.split('/').chain(arg.split('/')) {
+        match part {
+            "" | "." => {}                // leading/double/trailing slash, or "."
+            ".." => { stack.pop(); }      // pop; on empty stack (root) it's a no-op
+            name => stack.push(name),
+        }
+    }
+    if stack.is_empty() {
+        String::from("/")
+    } else {
+        let mut out = String::new();
+        for name in &stack {
+            out.push('/');
+            out.push_str(name);
+        }
+        out
+    }
+}
+
+/// Print the prompt for the current directory, e.g. `ziran:/docs> `.
+fn print_prompt(cwd: &str) {
+    print!("ziran:{cwd}> ");
+}
+
+/// `pwd` — print the current working directory.
+fn cmd_pwd(cwd: &str) {
+    println!("{cwd}");
+}
+
+/// `cd [path]` — change directory. No arg -> root. A bad `cd` leaves cwd unchanged.
+fn cmd_cd(cwd: &mut String, arg: &str) {
+    if arg.is_empty() {
+        cwd.clear();
+        cwd.push('/');
+        return;
+    }
+    let target = canonicalize(cwd, arg);
+    let image = crate::fs::boot_image();
+    let fs = match crate::fs::Fs::mount(&image) {
+        Ok(fs) => fs,
+        Err(e) => {
+            println!("cd: cannot mount filesystem: {e:?}");
+            return;
+        }
+    };
+    match fs.resolve(&target) {
+        Ok(crate::fs::Node::Dir { .. }) => *cwd = target,
+        Ok(crate::fs::Node::File { .. }) => println!("cd: not a directory: {target}"),
+        Err(_) => println!("cd: no such directory: {target}"),
+    }
+}
+
+/// `ls [path]` — list a directory (the cwd if no path). Subdirectories are tagged
+/// `<dir>`; files show their size. Mounts fresh each time (the image is ~350 bytes
+/// and stateless, so there is nothing to cache).
+fn cmd_ls(cwd: &str, arg: &str) {
+    let target = if arg.is_empty() { cwd.into() } else { canonicalize(cwd, arg) };
     let image = crate::fs::boot_image();
     let fs = match crate::fs::Fs::mount(&image) {
         Ok(fs) => fs,
@@ -196,23 +267,29 @@ fn cmd_ls() {
             return;
         }
     };
-    let files = fs.list();
-    if files.is_empty() {
-        println!("(no files)");
-        return;
-    }
-    for entry in files {
-        println!("  {:20} {} bytes", entry.name, entry.length);
+    match fs.list_dir(&target) {
+        Ok(entries) if entries.is_empty() => println!("(empty)"),
+        Ok(entries) => {
+            for e in entries {
+                if e.is_dir {
+                    println!("  {:20} <dir>", e.name);
+                } else {
+                    println!("  {:20} {} bytes", e.name, e.length);
+                }
+            }
+        }
+        Err(_) => println!("ls: no such directory: {target}"),
     }
 }
 
-/// `cat <file>` — print a file's bytes. Non-UTF-8 bytes are shown lossily rather
-/// than panicking (the on-disk data is arbitrary bytes, not guaranteed text).
-fn cmd_cat(name: &str) {
-    if name.is_empty() {
-        println!("usage: cat <file>");
+/// `cat <path>` — print a file's bytes, resolved relative to cwd. Non-UTF-8 bytes
+/// are shown lossily rather than panicking (on-disk data is arbitrary bytes).
+fn cmd_cat(cwd: &str, arg: &str) {
+    if arg.is_empty() {
+        println!("usage: cat <path>");
         return;
     }
+    let target = canonicalize(cwd, arg);
     let image = crate::fs::boot_image();
     let fs = match crate::fs::Fs::mount(&image) {
         Ok(fs) => fs,
@@ -221,9 +298,10 @@ fn cmd_cat(name: &str) {
             return;
         }
     };
-    match fs.read(name) {
-        Some(bytes) => print!("{}", alloc::string::String::from_utf8_lossy(bytes)),
-        None => println!("no such file: {name}"),
+    match fs.read_path(&target) {
+        Ok(bytes) => print!("{}", String::from_utf8_lossy(bytes)),
+        Err(crate::fs::FsError::IsADirectory) => println!("cat: is a directory: {target}"),
+        Err(_) => println!("no such file: {target}"),
     }
 }
 
@@ -235,10 +313,12 @@ pub extern "C" fn shell_main() {
     // below would wedge forever and no keystroke IRQ could ever wake us.
     interrupts::enable();
 
-    serial_println!("M10: shell online");
+    serial_println!("M12: file manager online");
     println!();
     println!("Ziran OS shell -- type `help` for commands.");
-    print!("{PROMPT}");
+
+    let mut cwd = String::from("/");
+    print_prompt(&cwd);
 
     let mut line = Line::new();
     loop {
@@ -248,9 +328,9 @@ pub extern "C" fn shell_main() {
                 Edit::Erase => print!("\u{8}"), // the VGA writer moves back and blanks the cell
                 Edit::Submit => {
                     println!();
-                    dispatch(line.as_str());
+                    dispatch(&mut cwd, line.as_str());
                     line.clear();
-                    print!("{PROMPT}");
+                    print_prompt(&cwd);
                 }
                 Edit::Ignored => {}
             },
@@ -297,10 +377,27 @@ pub fn self_test() {
     assert_eq!(parse("clear"), Command::Clear);
     assert_eq!(parse("mem"), Command::Mem);
     assert_eq!(parse("ps"), Command::Ps);
-    assert_eq!(parse("ls"), Command::Ls);
-    assert_eq!(parse("cat motd.txt"), Command::Cat("motd.txt"));
+    assert_eq!(parse("pwd"), Command::Pwd);
+    assert_eq!(parse("cd"), Command::Cd(""));
+    assert_eq!(parse("cd /docs"), Command::Cd("/docs"));
+    assert_eq!(parse("cd .."), Command::Cd(".."));
+    assert_eq!(parse("ls"), Command::Ls(""));
+    assert_eq!(parse("ls /docs"), Command::Ls("/docs"));
+    assert_eq!(parse("cat docs/x"), Command::Cat("docs/x"));
     assert_eq!(parse("cat"), Command::Cat("")); // no filename -> empty, handled by cmd_cat
-    assert_eq!(parse("cat a b"), Command::Cat("a")); // only the first token (a filename has no spaces)
+    assert_eq!(parse("cat a b"), Command::Cat("a")); // only the first token (a path has no spaces)
+
+    // Path normalization (the M12 load-bearing pure logic).
+    assert_eq!(canonicalize("/docs", ".."), "/");
+    assert_eq!(canonicalize("/", ".."), "/"); // pop past root is a no-op
+    assert_eq!(canonicalize("/", "docs"), "/docs");
+    assert_eq!(canonicalize("/a/b", "../c"), "/a/c");
+    assert_eq!(canonicalize("/a/b", "/x/y"), "/x/y"); // absolute ignores cwd
+    assert_eq!(canonicalize("/docs", "."), "/docs");
+    assert_eq!(canonicalize("/docs", "x/"), "/docs/x"); // trailing slash dropped
+    assert_eq!(canonicalize("/a", "../../b"), "/b"); // extra ".." no-ops at root
+    assert_eq!(canonicalize("/docs", ""), "/docs"); // empty arg = stay
+    assert_eq!(canonicalize("/", "//x//"), "/x"); // empty components dropped
     assert_eq!(parse("echo hello  world"), Command::Echo("hello  world"));
     assert_eq!(parse("echo"), Command::Echo(""));
     assert_eq!(parse("bogus xyz"), Command::Unknown("bogus"));
@@ -340,8 +437,8 @@ pub fn self_test() {
     );
 
     serial_println!(
-        "[ok] shell: editing, parsing, input ring, and ps/mem accessors verified \
-         (tasks={}, heap_free={})",
+        "[ok] shell: editing, parsing, path normalization, input ring, and ps/mem \
+         accessors verified (tasks={}, heap_free={})",
         tasks.len(),
         free
     );

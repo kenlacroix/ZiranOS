@@ -79,6 +79,20 @@ pub enum FsError {
     DirNotForward,
     /// A directory entry's `kind` field is neither file (0) nor directory (1).
     BadKind,
+    /// A path component names nothing in its directory (resolution-time).
+    NotFound,
+    /// A path descended through something that is a file, not a directory, or
+    /// `list_dir`/`cd` was given a file path (resolution-time).
+    NotADirectory,
+    /// `read_path`/`cat` was given a directory path (resolution-time).
+    IsADirectory,
+}
+
+/// What a path resolves to: a file's byte region, or a directory's entry region.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Node {
+    File { offset: usize, length: usize },
+    Dir { offset: usize, length: usize },
 }
 
 /// One directory entry, as `ls` renders it.
@@ -87,6 +101,7 @@ pub struct DirEntry {
     pub name: String,
     pub offset: usize,
     pub length: usize,
+    pub is_dir: bool,
 }
 
 /// A validated, read-only view over a RAM-disk image. It borrows the image; every
@@ -141,37 +156,75 @@ impl<'a> Fs<'a> {
         Ok(Fs { image, file_count })
     }
 
-    /// The directory listing: name + size for each file. What `ls` renders.
-    pub fn list(&self) -> Vec<DirEntry> {
-        (0..self.file_count)
+    /// Resolve a **canonical absolute path** (`"/"`, `"/docs"`, `"/docs/x.txt"`)
+    /// to the node it names. The path must already be canonical — the shell does
+    /// all `.`/`..` handling as pure string math (see `shell::canonicalize`), so
+    /// this only ever *descends*: no parent pointers, no cycles to chase.
+    pub fn resolve(&self, abs: &str) -> Result<Node, FsError> {
+        let mut node = Node::Dir { offset: SUPERBLOCK_LEN, length: self.file_count * DIRENT_LEN };
+        for comp in abs.split('/') {
+            if comp.is_empty() {
+                continue; // leading '/', or a stray '//'
+            }
+            let (doff, dlen) = match node {
+                Node::Dir { offset, length } => (offset, length),
+                Node::File { .. } => return Err(FsError::NotADirectory),
+            };
+            node = self.find_child(doff, dlen, comp).ok_or(FsError::NotFound)?;
+        }
+        Ok(node)
+    }
+
+    /// Find a named entry within the directory region `[doff, doff+dlen)`, as a
+    /// `Node`. Post-mount, every `kind` is a validated 0 or 1, so a non-`DIR` kind
+    /// is a file.
+    fn find_child(&self, doff: usize, dlen: usize, name: &str) -> Option<Node> {
+        for i in 0..(dlen / DIRENT_LEN) {
+            let base = doff + i * DIRENT_LEN;
+            if entry_name(&self.image[base..base + NAME_LEN]) == name {
+                let offset = read_u32_le(self.image, base + ENT_OFFSET) as usize;
+                let length = read_u32_le(self.image, base + ENT_LENGTH) as usize;
+                return Some(match read_u32_le(self.image, base + ENT_KIND) {
+                    KIND_DIR => Node::Dir { offset, length },
+                    _ => Node::File { offset, length },
+                });
+            }
+        }
+        None
+    }
+
+    /// List the directory at `abs`: name/size/kind for each entry. What `ls`
+    /// renders. `NotADirectory` if the path is a file.
+    pub fn list_dir(&self, abs: &str) -> Result<Vec<DirEntry>, FsError> {
+        let (off, len) = match self.resolve(abs)? {
+            Node::Dir { offset, length } => (offset, length),
+            Node::File { .. } => return Err(FsError::NotADirectory),
+        };
+        Ok((0..(len / DIRENT_LEN))
             .map(|i| {
-                let base = SUPERBLOCK_LEN + i * DIRENT_LEN;
+                let base = off + i * DIRENT_LEN;
                 DirEntry {
                     name: entry_name(&self.image[base..base + NAME_LEN]),
                     offset: read_u32_le(self.image, base + ENT_OFFSET) as usize,
                     length: read_u32_le(self.image, base + ENT_LENGTH) as usize,
+                    is_dir: read_u32_le(self.image, base + ENT_KIND) == KIND_DIR,
                 }
             })
-            .collect()
+            .collect())
     }
 
-    /// Read one file's bytes by exact name — a slice straight into the image, no
-    /// copy. `None` if there is no such file. What `cat` renders. Returns the
-    /// first match if names somehow repeat (the writer never produces duplicates,
-    /// but the reader does not assume it).
-    pub fn read(&self, name: &str) -> Option<&'a [u8]> {
-        // Copy the `&'a [u8]` out of `self` so the returned slice carries the
-        // image's lifetime, not this `&self` borrow.
-        let image = self.image;
-        for i in 0..self.file_count {
-            let base = SUPERBLOCK_LEN + i * DIRENT_LEN;
-            if entry_name(&image[base..base + NAME_LEN]) == name {
-                let offset = read_u32_le(image, base + ENT_OFFSET) as usize;
-                let length = read_u32_le(image, base + ENT_LENGTH) as usize;
-                return Some(&image[offset..offset + length]);
+    /// Read the file at `abs` — a zero-copy slice into the image. `IsADirectory`
+    /// if the path names a directory, `NotFound` if nothing.
+    pub fn read_path(&self, abs: &str) -> Result<&'a [u8], FsError> {
+        match self.resolve(abs)? {
+            // Copy the `&'a [u8]` out of `self` so the slice carries the image's
+            // lifetime, not this `&self` borrow.
+            Node::File { offset, length } => {
+                let image = self.image;
+                Ok(&image[offset..offset + length])
             }
+            Node::Dir { .. } => Err(FsError::IsADirectory),
         }
-        None
     }
 }
 
@@ -234,72 +287,137 @@ fn entry_name(raw: &[u8]) -> String {
     String::from_utf8_lossy(&raw[..end]).into_owned()
 }
 
-/// Build the boot RAM disk: a valid ZranFS image packing a fixed set of files.
-/// This is the *writer*. It shares no structs with [`Fs`] — it just lays down
-/// little-endian bytes, exactly as an on-disk image would be.
+/// Write one 32-byte directory entry (name, offset, length, kind) to `img`.
+fn write_entry(img: &mut Vec<u8>, name: &str, offset: u32, length: u32, kind: u32) {
+    let mut namebuf = [0u8; NAME_LEN];
+    let nb = name.as_bytes();
+    let take = nb.len().min(NAME_LEN);
+    namebuf[..take].copy_from_slice(&nb[..take]);
+    img.extend_from_slice(&namebuf); // +0x00 name
+    img.extend_from_slice(&offset.to_le_bytes()); // +0x14 offset
+    img.extend_from_slice(&length.to_le_bytes()); // +0x18 length
+    img.extend_from_slice(&kind.to_le_bytes()); // +0x1C kind
+}
+
+/// Build the boot RAM disk: a valid ZranFS **v2 tree**. This is the *writer* — it
+/// shares no structs with [`Fs`], just lays down little-endian bytes. The tree is:
+///
+/// ```text
+/// /                       (root: motd.txt, readme, ziran.txt, docs/)
+/// └── docs/               (filesystem.txt, shell.txt — the OS carrying a bit of
+///                          its own explanation)
+/// [hidden]  b"FLAG{...}"   bytes in the image with NO directory entry — the M16
+///                          exfil target: present, yet unreachable by ls/cat.
+/// ```
+///
+/// Physical layout satisfies the forward-ordering rule automatically: superblock,
+/// then the root table, then the `docs/` child table (which starts exactly at the
+/// root table's end), then all file data, then the secret.
 pub fn boot_image() -> Vec<u8> {
-    const FILES: &[(&str, &[u8])] = &[
+    let root_files: &[(&str, &[u8])] = &[
         ("motd.txt", b"Hello, Ziran!"),
         ("readme", b"Ziran OS -- a from-scratch x86_64 kernel.\n"),
-        // The project's namesake line, in UTF-8 (self-so).
         ("ziran.txt", "\u{81ea}\u{7136} (ziran): that which arises without external forcing.\n".as_bytes()),
     ];
+    let docs_files: &[(&str, &[u8])] = &[
+        ("filesystem.txt", b"A file is a lie a header tells about bytes.\n"),
+        ("shell.txt", b"cd, pwd, ls, cat -- navigation over ZranFS v2.\n"),
+    ];
+    // The planted secret: bytes with no directory entry pointing at them (§8).
+    const SECRET: &[u8] = b"FLAG{ziran-boundary-leak}";
 
-    let n = FILES.len();
-    let data_start = SUPERBLOCK_LEN + n * DIRENT_LEN;
-    let data_total: usize = FILES.iter().map(|(_, b)| b.len()).sum();
-    let total = data_start + data_total;
+    let root_count = root_files.len() + 1; // + the docs/ directory entry
+    let docs_count = docs_files.len();
+
+    let root_table_off = SUPERBLOCK_LEN;
+    let docs_table_off = root_table_off + root_count * DIRENT_LEN;
+    let data_off = docs_table_off + docs_count * DIRENT_LEN;
+
+    let data_total: usize = root_files.iter().map(|(_, b)| b.len()).sum::<usize>()
+        + docs_files.iter().map(|(_, b)| b.len()).sum::<usize>();
+    let total = data_off + data_total + SECRET.len();
 
     let mut img = Vec::with_capacity(total);
 
     // Superblock.
-    img.extend_from_slice(&MAGIC); // 0x00
-    img.extend_from_slice(&VERSION.to_le_bytes()); // 0x04
-    img.extend_from_slice(&(n as u16).to_le_bytes()); // 0x06 file_count
-    img.extend_from_slice(&(total as u32).to_le_bytes()); // 0x08 total_size (cross-check)
-    img.extend_from_slice(&0u32.to_le_bytes()); // 0x0C reserved
+    img.extend_from_slice(&MAGIC);
+    img.extend_from_slice(&VERSION.to_le_bytes());
+    img.extend_from_slice(&(root_count as u16).to_le_bytes());
+    img.extend_from_slice(&(total as u32).to_le_bytes());
+    img.extend_from_slice(&0u32.to_le_bytes()); // reserved
 
-    // Directory table.
-    let mut offset = data_start;
-    for (name, bytes) in FILES {
-        let mut namebuf = [0u8; NAME_LEN];
-        let nb = name.as_bytes();
-        let take = nb.len().min(NAME_LEN);
-        namebuf[..take].copy_from_slice(&nb[..take]);
-        img.extend_from_slice(&namebuf); // +0x00 name
-        img.extend_from_slice(&(offset as u32).to_le_bytes()); // +0x14 offset
-        img.extend_from_slice(&(bytes.len() as u32).to_le_bytes()); // +0x18 length
-        img.extend_from_slice(&0u32.to_le_bytes()); // +0x1C reserved
-        offset += bytes.len();
+    // Root table. Data offsets accumulate as we go: root files' data comes first
+    // (right after both tables), then docs files' data.
+    let mut cursor = data_off;
+    for (name, bytes) in root_files {
+        write_entry(&mut img, name, cursor as u32, bytes.len() as u32, KIND_FILE);
+        cursor += bytes.len();
+    }
+    write_entry(&mut img, "docs", docs_table_off as u32, (docs_count * DIRENT_LEN) as u32, KIND_DIR);
+
+    // docs/ child table (its files' data follows the root files' data).
+    for (name, bytes) in docs_files {
+        write_entry(&mut img, name, cursor as u32, bytes.len() as u32, KIND_FILE);
+        cursor += bytes.len();
     }
 
-    // Data region.
-    for (_, bytes) in FILES {
+    // Data region: root files, then docs files (matching the offsets above).
+    for (_, bytes) in root_files {
         img.extend_from_slice(bytes);
     }
+    for (_, bytes) in docs_files {
+        img.extend_from_slice(bytes);
+    }
+
+    // The hidden secret, last — inside the image, named by nothing.
+    img.extend_from_slice(SECRET);
 
     debug_assert_eq!(img.len(), total, "fs: boot_image size mismatch");
     img
 }
 
 /// Prove the filesystem over serial, deterministically, with no keyboard: mount
-/// the boot image, check the directory and one file's *exact* bytes, and — the
-/// honest gate — reject four deliberately-corrupt images, each with its specific
-/// error. A reader that returns the right bytes on a good image *and* refuses
-/// four specific malformations is provably parsing, not coincidentally working.
+/// the boot image, navigate the directory tree and check a file's *exact* bytes,
+/// confirm the planted secret is unreachable, and — the honest gate — reject
+/// eight deliberately-corrupt images, each with its specific error. A reader that
+/// returns the right bytes on a good image, refuses eight malformations (a
+/// directory *cycle* among them, without looping), and cannot reach the hidden
+/// bytes is provably parsing, not coincidentally working.
 pub fn self_test() {
     let image = boot_image();
 
-    // Happy path: mount, list, exact bytes.
+    // Happy path: mount the tree, read a root file's exact bytes.
     let fs = Fs::mount(&image).expect("fs: boot image failed to mount");
-    let list = fs.list();
+    let root = fs.list_dir("/").expect("fs: root not listable");
     assert!(
-        list.iter().any(|e| e.name == "motd.txt" && e.length == 13),
+        root.iter().any(|e| e.name == "motd.txt" && e.length == 13 && !e.is_dir),
         "fs: motd.txt missing or wrong size"
     );
-    let motd = fs.read("motd.txt").expect("fs: motd.txt unreadable");
+    assert!(root.iter().any(|e| e.name == "docs" && e.is_dir), "fs: docs/ missing");
+    let motd = fs.read_path("/motd.txt").expect("fs: /motd.txt unreadable");
     assert_eq!(motd, &b"Hello, Ziran!"[..], "fs: motd.txt bytes wrong");
-    assert!(fs.read("nope").is_none(), "fs: a phantom file was readable");
+
+    // Navigate into the subdirectory and read a file byte-for-byte.
+    assert!(matches!(fs.resolve("/docs"), Ok(Node::Dir { .. })), "fs: /docs not a dir");
+    let docs = fs.list_dir("/docs").expect("fs: /docs not listable");
+    assert_eq!(docs.len(), 2, "fs: /docs should have 2 files");
+    let fsdoc = fs.read_path("/docs/filesystem.txt").expect("fs: subdir file unreadable");
+    assert_eq!(
+        fsdoc,
+        &b"A file is a lie a header tells about bytes.\n"[..],
+        "fs: subdir file bytes wrong"
+    );
+
+    // Resolution-time errors are specific, not panics.
+    assert_eq!(fs.read_path("/docs").err(), Some(FsError::IsADirectory));
+    assert_eq!(fs.resolve("/nope").err(), Some(FsError::NotFound));
+    assert_eq!(fs.list_dir("/motd.txt").err(), Some(FsError::NotADirectory));
+
+    // The boundary holds: the planted secret has no directory entry, so NO path
+    // reaches it — it is present in the image yet unreachable by ls/cat. (M16's
+    // job is to find the crafted input that would leak it.)
+    assert_eq!(fs.read_path("/FLAG").err(), Some(FsError::NotFound));
+    assert!(fs.read_path("/docs/FLAG").is_err(), "fs: secret must be unreachable");
 
     // Corrupt-input rejections — each asserts the *specific* FsError.
     let mut bad_magic = image.clone();
@@ -352,8 +470,9 @@ pub fn self_test() {
     assert_eq!(Fs::mount(&bad_kind).err(), Some(FsError::BadKind));
 
     crate::serial_println!(
-        "[ok] fs: mounted {} files, motd.txt verified byte-for-byte, 8 corrupt images rejected",
-        list.len()
+        "[ok] fs: mounted a v2 tree ({} root entries incl. docs/), read /docs/filesystem.txt \
+         byte-for-byte, secret unreachable, 8 corrupt images rejected (incl. a cycle, no hang)",
+        root.len()
     );
     crate::serial_println!("M11: filesystem online");
 }
