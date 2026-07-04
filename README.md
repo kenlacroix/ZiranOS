@@ -17,6 +17,47 @@ stand right now.
 
 ---
 
+## Why this exists — and why it isn't AI slop
+
+**What I set out to learn** wasn't "how to build an OS." It was what is actually
+happening beneath every abstraction I'd been trusting on faith — and the way to
+learn that is to turn each abstraction into a mechanism you can hold in your head:
+
+- a **task** is just a saved stack pointer; switching is swapping `rsp` so a
+  `ret` resumes someone else's call stack.
+- a **file** is a header's lie about a flat run of bytes; a **directory** is the
+  same lie, one level down.
+- **preemption** is the exact switch a task would make voluntarily — forced by a
+  timer it can't refuse.
+- and the harder, transferable ones: *a termination proof is not a safety proof*;
+  never allocate inside an interrupt-guarded lock; a trust boundary validates
+  everything or it isn't one.
+
+**Isn't this just AI slop?** It's built with AI, openly (see
+[CLAUDE.md](CLAUDE.md)) — and that's the interesting part, not something to hide.
+Slop is unverified, unreviewed, undocumented output. This is the opposite, and
+you can check it:
+
+- **Verified.** Every milestone ships a deterministic self-test that runs on boot
+  and is asserted by CI — not "looks fine" but *proves* specific properties: a
+  freed frame is reused, a file's exact bytes round-trip, **ten** malformed disk
+  images are rejected (a directory *cycle* among them, without hanging).
+- **Reviewed.** Every milestone got an adversarial, multi-agent code review that
+  found *real* latent bugs before they shipped — a deadlock that only triggers
+  when the timer preempts mid-lock; a filesystem validator a crafted image could
+  hang or stack-overflow. The fixes are in the commit history and the blog.
+- **Honest.** Every post documents what broke, what was deliberately deferred, and
+  the checks left un-done — the opposite of a highlight reel.
+
+The claim isn't "I hand-typed an operating system." It's: **this is what
+disciplined AI-assisted systems engineering looks like** — the human owns the
+vision, the [non-goals](PLAN.md), and a mandatory *Think → Plan → Build → Review →
+Reflect* loop; the AI does the mechanical work inside that harness; and the whole
+trail is here to prove the rigor. Slop is what you get when you skip the harness.
+This is the harness.
+
+---
+
 ## Current status
 
 The kernel boots via a **hand-written Multiboot2 + long-mode transition** in
