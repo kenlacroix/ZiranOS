@@ -128,6 +128,7 @@ enum Command<'a> {
     Ls(&'a str),
     Cat(&'a str),
     Load,
+    Net,
     Unknown(&'a str),
 }
 
@@ -159,6 +160,7 @@ fn parse(line: &str) -> Command<'_> {
         // `load` takes its (large) payload by streaming the console itself, not
         // from this line — see `cmd_load`. Any tail here is ignored.
         "load" => Command::Load,
+        "net" => Command::Net,
         other => Command::Unknown(other),
     }
 }
@@ -180,6 +182,7 @@ fn dispatch(cwd: &mut String, line: &str) {
             shln!("  ls [path]     list a directory (default: cwd)");
             shln!("  cat <path>    print a file");
             shln!("  load          mount a base64 image pasted over the console");
+            shln!("  net           send 'hello' over the loopback interface");
         }
         Command::Echo(rest) => shln!("{rest}"),
         Command::Clear => crate::vga_buffer::clear_screen(),
@@ -190,6 +193,7 @@ fn dispatch(cwd: &mut String, line: &str) {
         Command::Ls(p) => cmd_ls(cwd, p),
         Command::Cat(p) => cmd_cat(cwd, p),
         Command::Load => cmd_load(),
+        Command::Net => crate::net::demo(),
         Command::Unknown(verb) => shln!("unknown command: {verb} (try help)"),
     }
 }
@@ -612,6 +616,7 @@ pub fn self_test() {
     assert_eq!(parse("cat docs/x"), Command::Cat("docs/x"));
     assert_eq!(parse("cat"), Command::Cat("")); // no filename -> empty, handled by cmd_cat
     assert_eq!(parse("cat a b"), Command::Cat("a")); // only the first token (a path has no spaces)
+    assert_eq!(parse("net"), Command::Net);
 
     // Path normalization (the M12 load-bearing pure logic).
     assert_eq!(canonicalize("/docs", ".."), "/");

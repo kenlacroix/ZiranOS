@@ -32,6 +32,7 @@ mod heap;
 mod interrupts;
 mod keyboard;
 mod multiboot;
+mod net;
 mod paging;
 mod pic;
 mod pit;
@@ -224,6 +225,13 @@ pub extern "C" fn kernel_main(multiboot_info_addr: u64) -> ! {
     fs::self_test();
 
     shell::self_test();
+
+    // Milestone 14: the networking stub. A single in-kernel loopback interface with
+    // a minimal socket layer (bind/send/poll/recv) — a socket is a named endpoint
+    // with a receive queue, reached by address. No IP/TCP/ports/device/wire (the
+    // stretch-stub carve-out of the networking non-goal). See net.rs.
+    net::init();
+    net::self_test();
 
     // Milestone 13 (step 4): the milestone payload. Run one program in ring 3,
     // have it print 'Z' via the `int 0x80` syscall gate from CPL 3, and return to
