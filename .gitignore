@@ -11,6 +11,14 @@
 /web/libv86.js
 /web/v86.wasm
 /web/*.bin
+# Staged for the browser tutorial by `make web` (reproducible; not committed)
+/web/ziran.iso
+# qemu-wasm live-boot assets (built separately, ~46 MB — see the plan doc)
+/web/qemu-system-x86_64.js
+/web/qemu-system-x86_64.wasm
+/web/qemu-system-x86_64.worker.js
+/web/qemu-system-x86_64.data
+/web/qemu-wasm/
 
 # Editor / OS noise
 .DS_Store

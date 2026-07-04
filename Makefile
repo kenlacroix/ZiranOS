@@ -84,7 +84,7 @@ ifeq ($(PROFILE),debug)
     CARGO_FLAGS :=
 endif
 
-.PHONY: all iso run console run-headless debug gdb clean check-header web
+.PHONY: all iso run console run-headless debug gdb clean check-header web serve
 
 all: $(KERNEL)
 
@@ -168,15 +168,21 @@ debug: $(ISO) $(QEMU_FW_DEPS)
 gdb:
 	gdb $(KERNEL) -ex "target remote :1234"
 
-# Stage the kernel image for the browser tutorial (web/). Live mode loads
-# web/kernel.bin; see web/README.md for serving and self-hosting the v86 files.
-web: $(KERNEL)
+# Stage the kernel images for the browser tutorial (web/). kernel.bin/kernel-v86.bin
+# feed the (reconstruction-mode) v86 path; ziran.iso is what the real qemu-wasm
+# live boot loads (see docs/planning/web-live-boot-qemu-wasm.md).
+web: $(KERNEL) $(ISO)
 	cp $(KERNEL) web/kernel.bin
 	$(OBJCOPY) -O binary $(KERNEL) web/kernel-v86.bin
-	@echo "staged web/kernel.bin (ELF, reference) and web/kernel-v86.bin (flat, v86 live boot)"
-	@echo "serve it:  cd web && python3 -m http.server 8000  # then open localhost:8000"
+	cp $(ISO) web/ziran.iso
+	@echo "staged web/kernel.bin, web/kernel-v86.bin, and web/ziran.iso (for qemu-wasm)"
+	@echo "serve it:  make serve   # (COOP/COEP headers on; needed for the live boot)"
+
+# Serve web/ with the cross-origin isolation headers the live qemu-wasm boot needs.
+serve: web
+	cd web && python3 serve.py
 
 clean:
 	cargo clean
 	rm -rf build
-	rm -f web/kernel.bin web/kernel-v86.bin
+	rm -f web/kernel.bin web/kernel-v86.bin web/ziran.iso

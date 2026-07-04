@@ -401,6 +401,7 @@
         <div class="controls">
           <button class="btn primary" id="boot">▸ Boot</button>
           <button class="btn" id="restart">↺ Restart</button>
+          <button class="btn" id="boot-real" hidden title="Runs real QEMU compiled to WebAssembly (~46 MB) to boot the actual 64-bit kernel — not a replay. Needs the qemu-wasm assets in web/ and cross-origin-isolation headers (make serve). See docs/planning/web-live-boot-qemu-wasm.md.">▸ Boot the real kernel (~46 MB)</button>
           <span class="badge" id="hint" style="align-self:center">click the screen, then type</span>
         </div>
       </div>
@@ -1035,6 +1036,42 @@ make debug      # boot frozen, attach GDB</code>
   }
   $("boot").addEventListener("click",function(){ screenEl.focus(); boot(); });
   $("restart").addEventListener("click",function(){ boot(); });
+
+  // --- Live boot via qemu-wasm (REAL 64-bit QEMU in WebAssembly; ~46 MB; opt-in) --
+  // v86 is 32-bit and can't run our long-mode kernel; qemu-wasm can. Off until the
+  // assets are built into web/ and verified in a browser (docs/planning/
+  // web-live-boot-qemu-wasm.md). Flip QEMU_WASM_READY to true then.
+  var QEMU_WASM_READY = false;
+  (function(){
+    var btn = $("boot-real");
+    if(!btn) return;
+    if(QEMU_WASM_READY) btn.hidden = false;
+    var started = false, live = false;
+    function line(t){
+      screenEl.appendChild(document.createTextNode(t + "\n"));
+      screenEl.scrollTop = screenEl.scrollHeight;
+      if(!live && t.indexOf("Ziran OS booted") >= 0){ live = true; badge.textContent = "live · real kernel"; }
+    }
+    btn.addEventListener("click", function(){
+      if(started) return; started = true; btn.disabled = true;
+      badge.textContent = "loading real kernel…";
+      if(simTimer){ clearInterval(simTimer); simTimer = null; }
+      if(emulator && emulator.destroy){ try{ emulator.destroy(); }catch(e){} emulator = null; }
+      screenEl.innerHTML = "";
+      line("Loading real QEMU (WebAssembly)… first load is ~46 MB, one-time.");
+      var s = document.createElement("script");
+      s.src = "qemu-wasm-boot.js";
+      s.onload = function(){
+        self.ZiranQemuWasm.boot({
+          onLine: line,
+          onStatus: function(t){ badge.textContent = t; },
+          onError: function(e){ badge.textContent = "live boot failed"; line("[live boot] " + (e && e.message ? e.message : e)); }
+        });
+      };
+      s.onerror = function(){ badge.textContent = "live boot failed"; line("[live boot] could not load qemu-wasm-boot.js"); };
+      document.body.appendChild(s);
+    });
+  })();
 
   // autostart the tour's machine (simulated-first is instant; real upgrades if reachable)
   boot();
