@@ -20,7 +20,7 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started
 | 10 | Simple shell | ✅ | Interactive REPL running as a **task** on the M9 scheduler (`src/shell.rs`). The keyboard IRQ became a pure producer that pushes bytes into a lock-free SPSC ring (`keyboard::push`/`pop`); the shell task consumes it — echo, backspace, dispatch — and `hlt`s when idle. Built-ins `help`/`echo`/`clear`/`mem`/`ps`; `ps`/`mem` snapshot live scheduler/heap state under the IF-guarded, allocation-free discipline. Rewiring echo out of the IRQ also retired a latent VGA-lock deadlock. Self-test pins the (pure) editing/parsing/ring/accessor logic; `M10:` marker asserted by CI. See `docs/concepts/input-and-shell.md`. |
 | 11 | Filesystem (read) | ✅ | `src/fs.rs`: a minimal read-only **ZranFS** over a heap RAM disk. `boot_image()` is an in-kernel `mkfs` (writer) that packs files into a `Vec<u8>` — 16-byte superblock (`ZRFS` magic, version, file_count, total_size), 32-byte dir entries (name + offset + length), flat data. `Fs::mount` is the reader **and** the whole trust boundary: it re-derives the directory from raw bytes trusting only the array, validating magic/version/total_size/dir-fits/every-extent-in-bounds with checked arithmetic. `list`/`read` are then total, panic-free, zero-copy — no `unsafe`. The shell gains `ls`/`cat`. Self-test proves exact bytes + **5** corrupt-image rejections (the M16 seed); `M11:` marker asserted by CI. Custom over FAT16 (no `mkfs.fat` build magic — PLAN §7). See `docs/concepts/filesystem.md`. |
 | 12 | **File manager** (end goal) | ✅ | **The end goal — reached.** ZranFS **v2** adds subdirectories (a directory is a file whose bytes are more entries; one `kind` byte, the delta). `Fs::mount` recurses the tree and is provably safe on any input: a monotonic **high-water-mark** keeps directory tables globally disjoint (validated once → linear, DAGs/cycles → `DirNotForward`) and a `MAX_DEPTH` cap bounds the stack (`TooDeep`). The shell gains `cd`/`pwd`/`ls`/`cat` with a cwd + a pure, unit-tested `canonicalize` (`.`/`..` as string math, no disk parent-pointers) and a `ziran:/docs>` prompt. Driveable in a terminal via the new **serial console** (`make console`). Self-test navigates the tree, reads a subdir file byte-exact, and rejects **10** corrupt images (cycle, deep chain, diamond DAG — no hang, no overflow); `M12:` marker asserted by CI. A hidden `FLAG{…}` (no dir entry) is planted for M16. Completes the core arc. See `docs/concepts/filesystem.md`. |
-| 13 | Userspace / syscalls (stretch) | 🚧 | First real privilege boundary — enables the security track. Think→Plan done (`docs/planning/milestone-13-eng-plan.md`). **Core reached (build steps 1–4/6):** (1) `src/gdt.rs` rebuilds the GDT in Rust (k-code 0x08, k-data 0x10, u-code 0x18/DPL3, u-data 0x20/DPL3) + a TSS with RSP0/IST1; `lgdt`, far-return CS reload, `ltr`; `tr=0x28` asserted. (2) `src/paging.rs` gains a `USER` flag + `map_user_page` — U/S on the leaf **and every table on the walk** (incl. shared `PML4[0]`; kernel leaves stay U/S=0); `user_map_self_test` proves U/S=1 at all 4 levels. (3) `src/interrupts.rs` gains a DPL-3 `int 0x80` gate + `syscall` dispatch (`SYS_PRINT`/`SYS_EXIT`, return in `ctx.rax`). (4) **`src/usermode.rs` + `boot/usermode.asm`: a real ring-3 excursion** — a 21-byte position-independent blob copied into a `map_user_page`'d frame, entered by a fabricated `iretq` (CS 0x1b/SS 0x23), prints `'Z'` via `int 0x80` **from CPL 3**, then `SYS_EXIT` rewrites the ISR's saved frame to return to ring 0 (`resume_kernel`, asserting CPL 3). Verified by serial (`CS=0x1b, CPL=3`) and QEMU `-d int` (`v=80 … cpl=3`). Marker `M13: userspace online` (Makefile bumped). (5) **Enforcement test (`usermode::enforcement_test`, the M15 preview):** two ring-3 blobs deliberately violate the boundary — `cli` → **#GP**, and `mov rax,[0xb8000]` → **#PF** (err `0x5` = protection + user, U/S bit set) — and `interrupt_dispatch`'s ring-3 fault arm catches each **from CPL 3**, reports it, and unwinds to ring 0 (`recover_from_violation`) instead of halting; a ring-0 fault still halts. Verified by serial and `-d int` (`v=0d`/`v=0e cpl=3`, CR2=0xb8000). **Code complete.** Remaining (step 6, docs/review): `docs/concepts/privilege.md`, a web tour step, then `/kernel-review` → `/retro` → `/document-milestone` → `/red-team`. |
+| 13 | Userspace / ring 3 / syscalls (stretch) | ✅ | **The project's first CPU privilege boundary — the security track is now open.** `src/gdt.rs` rebuilds the GDT in Rust with ring-3 code/data descriptors + a TSS whose RSP0 catches the ring 3 → 0 transition (`tr=0x28`); `src/paging.rs` adds a `USER` flag + `map_user_page` that sets U/S on the leaf **and every table on the walk** (the CPU ANDs it down the whole chain; kernel leaves stay U/S=0); `src/interrupts.rs` adds a DPL-3 `int 0x80` gate + `syscall` dispatch. **The excursion** (`src/usermode.rs` + `boot/usermode.asm`): a position-independent blob entered by a fabricated `iretq` (CS 0x1b/SS 0x23) prints `'Z'` via `int 0x80` **from CPL 3**, then returns to ring 0 by rewriting the ISR's saved frame. **Enforcement test:** `cli` → #GP and `mov rax,[0xb8000]` → #PF, both caught at CPL 3 (verified by serial + QEMU `-d int`: `v=80`/`v=0d`/`v=0e cpl=3`). `/kernel-review` (no critical/high; 4 low fixes) + `/red-team` (9/9 ring-3 escapes blocked; `sgdt`/`sidt` info-leak found, UMIP would close it) done. Concept doc `docs/concepts/privilege.md`, blog post `docs/blog/13-the-first-wall.md`, web tour step. See `docs/planning/milestone-13-{eng-plan,red-team,retro}.md`. Marker `M13: userspace online`. |
 | 14 | Networking stub (stretch) | ⬜ | |
 | 15 | Break the privilege boundary (security) | ⬜ | Adversarial self-testing; needs M13. See `/red-team` + PLAN.md §8. |
 | 16 | Break the filesystem boundary (security) | ⬜ | Needs M11–12. Objective: **exfiltrate a hidden secret** (bytes on the RAM disk with no directory entry) by aliasing them past a file's extent — targets M11's deliberately-loose extent check. Groundwork (the hidden bytes) is planted in M12's `mkfs`. See PLAN §8. |
@@ -61,24 +61,31 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started
   exponential re-validation). The pure `canonicalize` path math is unit-tested
   exhaustively. Interactive `cd`/`ls`/`cat` is drivable over `make console`.
 
-## Next up (Milestone 13 — userspace / syscalls, stretch)
+## Next up (the security track + stretch)
 
-The core goal is met; from here the roadmap is stretch + the security track. Its
-**eng-plan is being written now** (Think → Plan phase); no kernel code exists yet.
+The core goal (M12) is met and the first privilege boundary (M13) is built, so
+from here the roadmap is the security track and the remaining stretch goals — in
+any order:
 
-1. Basic **ring-3 separation** and a minimal **syscall interface** — the first
-   real privilege boundary, which is what the security milestones need to exist.
-2. This unlocks **M15** (break the privilege boundary): from ring 3, try to read a
-   kernel-only page or run a privileged instruction and watch the CPU stop you.
-3. **M16** (break the filesystem boundary) is already seeded: the hidden
-   `FLAG{…}` is planted on the M12 disk, unreachable by `ls`/`cat` — the exfil
-   target is a crafted image that aliases its bytes past a file's extent.
+1. **M15 — break the privilege boundary.** M13 already ships the minimal version
+   (`cli`/kernel-read caught at CPL 3) and a `/red-team` pass proving 9/9 ring-3
+   escapes blocked. M15 turns it into a **flag capture**: plant a secret in a
+   kernel-only (U/S=0) page and have a ring-3 program try in earnest to read it.
+   The M13 red-team found the two seams to aim at (`docs/planning/milestone-13-red-team.md`):
+   the syscall's argument path (register-only today — the first *user pointer* it
+   accepts is where copy-from-user validation must live) and the non-privileged
+   `sgdt`/`sidt` info-leak.
+2. **M16 — break the filesystem boundary** is already seeded: the hidden `FLAG{…}`
+   is planted on the M12 disk, unreachable by `ls`/`cat` — the exfil target is a
+   crafted image that aliases its bytes past a file's extent.
+3. **M14 — networking stub** (loopback / trivial virtio-net), a separate stretch.
 
 Deferred (fold in when robustness matters):
-- A proper Rust-built GDT with a TSS + IST stack for the double-fault handler, so
-  even a stack overflow reports instead of triple-faulting. The `ist` field in
-  each IDT entry is already stubbed — and M9's per-task stacks have no guard page,
-  which makes this more valuable than before.
+- A **TSS + IST stack for the double-fault handler**, so even a stack overflow
+  reports instead of triple-faulting. M13 built the TSS and wired an IST1 stack
+  into it, but no IDT gate uses IST yet (`ist` is still 0); pointing the #DF gate
+  at IST1 is the remaining step. M9's per-task stacks (and M13's RSP0 stack) still
+  have no guard page, which makes this more valuable than before.
 - A **local APIC timer** (with calibration and moving off the 8259s) as the
   "real" successor to the M9 PIT — a named future milestone. The M9 scheduler is
   timer-source agnostic, so it's a drop-in later.

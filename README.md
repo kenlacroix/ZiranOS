@@ -125,7 +125,8 @@ so R2 is optional).
 | M10 interactive shell | ✅ done |
 | M11 filesystem (read) — `ls`/`cat` | ✅ done |
 | M12 **file manager** (end goal) — `cd`/`pwd`/`ls`/`cat`, subdirectories | ✅ **done** |
-| M13+ userspace/syscalls, security track | ⬜ stretch |
+| M13 userspace / ring 3 / syscalls — the first privilege boundary | ✅ **done** |
+| M14 networking stub · M15–16 security track (break the boundaries) | ⬜ stretch |
 
 ## What happens when it boots
 
@@ -134,9 +135,11 @@ GRUB (Multiboot2)
   → boot/boot.asm            32-bit: verify CPU, build page tables, enter long mode
   → boot/long_mode_init.asm  64-bit: load segments, call into Rust
   → kernel_main (src/lib.rs) banner, then bring up memory, the heap, the timer,
-                             a scheduler, and a RAM-disk filesystem tree, then
-                             spawn a shell task and idle — a `ziran:/>` prompt you
-                             navigate (`help`, `ps`, `mem`, `cd`, `pwd`, `ls`, `cat`)
+                             a scheduler, and a RAM-disk filesystem tree; drop a
+                             program into ring 3 that calls back via `int 0x80`
+                             (M13), then spawn a shell task and idle — a `ziran:/>`
+                             prompt you navigate (`help`, `ps`, `mem`, `cd`, `pwd`,
+                             `ls`, `cat`)
 ```
 
 Every step is readable and hand-written; there is no `bootimage`/`build.rs`
