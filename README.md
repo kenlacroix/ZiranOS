@@ -27,9 +27,12 @@ over the PS/2 controller — typing echoes to the screen, interrupt-driven — a
 reads the Multiboot2 memory map to stand up a bitmap **physical-frame allocator**
 over usable RAM (alloc, free, and reclaim), builds its own **page tables** —
 switching `CR3` off the boot map to virtual memory it controls (`map`/`translate`/
-`unmap`) — and stands up a **heap** so Rust's `Vec`, `Box`, and `String` work.
-That covers milestones 1–8. Everything assembles, compiles, and links on
-stable Rust; CI boots the image under headless QEMU on every push.
+`unmap`) — stands up a **heap** so Rust's `Vec`, `Box`, and `String` work, and
+now drives a **preemptive scheduler**: a 100 Hz PIT timer interrupt hands the CPU
+between tasks, so two tasks that never yield are still interleaved (a task is
+just a saved stack pointer, switched by hand-written assembly). That covers
+milestones 1–9. Everything assembles, compiles, and links on stable Rust; CI
+boots the image under headless QEMU on every push.
 
 New here? Start with the plain-language explainers in
 [`docs/concepts/`](docs/concepts/) — e.g. [interrupts](docs/concepts/interrupts.md),
@@ -49,7 +52,8 @@ serve `web/`).
 | M6 physical memory (frame allocator) | ✅ done |
 | M7 paging / virtual memory | ✅ done |
 | M8 heap (`Vec`, `Box`, `String`) | ✅ done |
-| M9+ scheduling, shell, FS | ⬜ next |
+| M9 timer + preemptive scheduling | ✅ done |
+| M10+ shell, filesystem, file manager | ⬜ next |
 
 ## What happens when it boots
 
@@ -57,7 +61,8 @@ serve `web/`).
 GRUB (Multiboot2)
   → boot/boot.asm            32-bit: verify CPU, build page tables, enter long mode
   → boot/long_mode_init.asm  64-bit: load segments, call into Rust
-  → kernel_main (src/lib.rs) print a banner to VGA + serial, then halt
+  → kernel_main (src/lib.rs) banner, then bring up memory, the heap, the timer,
+                             and a scheduler — two tasks share the CPU — then idle
 ```
 
 Every step is readable and hand-written; there is no `bootimage`/`build.rs`
@@ -73,14 +78,21 @@ boot/                   hand-written boot assembly
   boot.asm                32-bit entry: CPU checks, page tables, long-mode switch
   long_mode_init.asm      64-bit entry: segment setup, call kernel_main
   isr.asm                 256 interrupt entry stubs + the shared trampoline
+  switch.asm              the context switch (switch_context) + task trampoline
 src/                    the no_std Rust kernel
   lib.rs                  kernel_main, panic handler, halt loop
   vga_buffer.rs           VGA text-mode writer + println! macros
   serial.rs               16550 UART (COM1) writer — what CI reads back
-  interrupts.rs           the IDT and the exception/interrupt dispatcher
+  interrupts.rs           the IDT, the interrupt dispatcher, IF helpers
   port.rs                 shared port-mapped I/O (inb/outb)
   pic.rs                  8259 PIC: remap, mask, end-of-interrupt
   keyboard.rs             PS/2 scancode -> character translation
+  multiboot.rs            parse the Multiboot2 memory map GRUB hands us
+  frame_allocator.rs      bitmap physical-frame allocator over usable RAM
+  paging.rs               kernel-built 4-level page tables (map/translate/unmap)
+  heap.rs                 the free-list heap behind #[global_allocator]
+  pit.rs                  8254 PIT: the periodic 100 Hz timer (IRQ0)
+  task.rs                 tasks, the context switch, the round-robin scheduler
 linker.ld               places the Multiboot header first, kernel at 1 MiB
 grub/grub.cfg           one-entry GRUB menu for the bootable ISO
 Makefile                the whole build/run/debug pipeline, spelled out

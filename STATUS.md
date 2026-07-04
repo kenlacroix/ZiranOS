@@ -16,23 +16,23 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started
 | 6 | Physical memory management | ✅ | `multiboot.rs` parses the Multiboot2 memory map (pointer already in RDI at handoff); `frame_allocator.rs` is a bitmap allocator over usable RAM with alloc/free/reclaim, reserving frame 0, the kernel image (`kernel_start`/`kernel_end` linker symbols), and the boot structure. Self-test + `M6:` marker asserted by CI. See `docs/concepts/physical-memory.md`. |
 | 7 | Paging / virtual memory | ✅ | `paging.rs` builds the kernel's own 4-level page tables from M6 frames, identity-maps physical memory, verifies them in-code, and switches `CR3` off the boot map. Exposes `translate`/`map_page` (fallible)/`unmap_page`; self-test round-trips a frame mapped above the 1 GiB window. See `docs/concepts/virtual-memory.md`. |
 | 8 | Heap allocator (`alloc`) | ✅ | `heap.rs`: a linked-list free-list allocator as the `#[global_allocator]`, over a 1 MiB heap eagerly mapped at 1 GiB (M7 `map_page` onto M6 frames). `Vec`/`Box`/`String` work; self-test proves reclaim (free → re-alloc reuses the address). See `docs/concepts/heap.md`. |
-| 9 | Timer + scheduling | ⬜ | Next. A periodic timer interrupt (PIT/APIC) and the first cooperative task switching. |
-| 10 | Simple shell | ⬜ | |
+| 9 | Timer + scheduling | ✅ | `pit.rs` programs the 8254 at 100 Hz (mode 2, IRQ0); `task.rs` is a round-robin scheduler over the heap where a task is a saved stack pointer, switched by `boot/switch.asm`'s `switch_context`. Cooperative first (`yield_now`, clean `ABABAB`), then preemptive: the timer IRQ drives `preempt`, so two tasks that never yield still interleave. Scheduler lock is interrupt-safe (IF-guarded). Self-tests + `M9:` markers asserted by CI. See `docs/concepts/timer-and-scheduling.md`. |
+| 10 | Simple shell | ⬜ | Next. Interactive command line (`help`, `echo`, `clear`, `mem`, `ps`) running on the M5 keyboard + M9 scheduler. |
 | 11 | Filesystem (read) | ⬜ | |
 | 12 | **File manager** (end goal) | ⬜ | |
 | 13 | Userspace / syscalls (stretch) | ⬜ | First real privilege boundary — enables the security track. |
 | 14 | Networking stub (stretch) | ⬜ | |
 | 15 | Break the privilege boundary (security) | ⬜ | Adversarial self-testing; needs M13. See `/red-team` + PLAN.md §8. |
 | 16 | Break the filesystem boundary (security) | ⬜ | Needs M11–12. |
-| — | Teaching tool (`web/`) | 🚧 | Dual-mode v86 embed + predict→observe→explain tour, covering M0–5. Grows one step per milestone. See `web/README.md`. |
+| — | Teaching tool (`web/`) | 🚧 | Dual-mode v86 embed + predict→observe→explain tour, covering M0–9. Grows one step per milestone. See `web/README.md`. |
 
 ## Verification state
 
 - **Assembles / compiles / links:** verified — `make` produces a valid Multiboot2
   ELF (`make check-header` confirms the magic).
 - **Boots under QEMU:** exercised by CI (`make run-headless`), which asserts both
-  the long-mode marker and `M8: kernel heap online`. Also boot-tested natively on
-  macOS (Apple Silicon) under UEFI — see `docs/POST_UPDATE_SETUP.md`.
+  the long-mode marker and `M9: preemptive scheduler online`. Also boot-tested
+  natively on macOS (Apple Silicon) under UEFI — see `docs/POST_UPDATE_SETUP.md`.
 - **Frame allocator:** the boot self-test proves alloc hands out distinct,
   aligned frames; reclaim returns a freed frame; and double-free / out-of-range
   free are rejected without corrupting the free count.
@@ -44,15 +44,21 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started
   capacity, allocates across four pages, and proves reclaim (free → re-alloc
   returns the same address) — plus that runtime allocation touches no frames.
 
-## Next up (Milestone 9 — timer + scheduling)
+## Next up (Milestone 10 — simple shell)
 
-1. Program a periodic timer (the 8253/8254 PIT, or the local APIC timer) and wire
-   its IRQ through the PIC to a handler, sending the EOI like the keyboard IRQ.
-2. Count ticks and prove the timer fires at a known rate — the kernel's first
-   sense of *time*.
-3. A first taste of scheduling: switch between two simple tasks on the tick — the
-   heap (M8) now makes per-task data structures possible.
+1. An interactive command line reading keystrokes (M5) into a line buffer, with
+   backspace and enter handling — the first program the kernel *runs for you*.
+2. A handful of built-in commands: `help`, `echo`, `clear`, `mem` (frame/heap
+   stats), `ps` (the scheduler's task list from M9).
+3. Run the shell as a task on the M9 scheduler, so it coexists with the idle
+   task rather than monopolising `kernel_main`.
 
-Deferred (fold in when robustness matters): a proper Rust-built GDT with a TSS +
-IST stack for the double-fault handler, so even a stack overflow reports instead
-of triple-faulting. The `ist` field in each IDT entry is already stubbed.
+Deferred (fold in when robustness matters):
+- A proper Rust-built GDT with a TSS + IST stack for the double-fault handler, so
+  even a stack overflow reports instead of triple-faulting. The `ist` field in
+  each IDT entry is already stubbed — and M9's per-task stacks have no guard page,
+  which makes this more valuable than before.
+- A **local APIC timer** (with calibration and moving off the 8259s) as the
+  "real" successor to the M9 PIT — recorded as a named future milestone so it
+  stays out of scope until deliberately chosen. The M9 scheduler is timer-source
+  agnostic, so this is a drop-in later.
