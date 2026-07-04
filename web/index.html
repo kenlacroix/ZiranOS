@@ -267,6 +267,43 @@
   dl.gloss-dl dd{margin:0;font-size:14px;color:var(--ink-soft);line-height:1.55}
   dl.gloss-dl dd code{font-family:var(--font-mono);font-size:.88em;color:var(--accent)}
 
+  /* ---- "why this exists / anti-slop" landing panel (plain HTML, theme-var
+     driven, reads in both light and dark). Cards for the three checkable claims. ---- */
+  .why{margin:clamp(22px,4vw,36px) 0 6px;border:1px solid var(--line);border-radius:16px;
+    background:var(--surface);box-shadow:var(--shadow);overflow:hidden}
+  .why-in{padding:clamp(20px,3.4vw,32px)}
+  .why .eyebrow{margin-bottom:8px}
+  .why h2{font-size:clamp(21px,3vw,29px);margin:0 0 14px;letter-spacing:-.01em;text-wrap:balance;line-height:1.12}
+  .why h2 em{font-style:normal;color:var(--accent)}
+  .why p{margin:0 0 14px;color:var(--ink-soft);max-width:72ch;font-size:15.5px}
+  .why p .ink{color:var(--ink);font-weight:500}
+  .why code{font-family:var(--font-mono);font-size:.9em;background:var(--surface-2);padding:1px 5px;border-radius:5px;color:var(--accent)}
+  .claims{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin:20px 0 4px}
+  @media(max-width:720px){.claims{grid-template-columns:1fr}}
+  .claim{border:1px solid var(--line);border-radius:12px;background:var(--surface-2);padding:16px 16px 17px}
+  .claim .k{font-family:var(--font-mono);font-size:11px;letter-spacing:.13em;text-transform:uppercase;
+    font-weight:700;color:var(--accent);display:flex;align-items:center;gap:8px;margin-bottom:9px}
+  .claim .k .mk{width:20px;height:20px;flex:none;display:grid;place-items:center;border-radius:6px;
+    background:var(--accent);color:#1a0f02;font-size:12px;font-weight:700}
+  .claim p{margin:0;font-size:13.5px;color:var(--ink-soft);max-width:none;line-height:1.55}
+  .claim p b{color:var(--ink);font-weight:600}
+  .why .thesis{margin:22px 0 0;padding:16px 18px;border-left:3px solid var(--accent);background:var(--accent-ghost);
+    border-radius:0 10px 10px 0;font-size:15px;color:var(--ink);max-width:none}
+  .why .thesis b{color:var(--accent);font-weight:600}
+  .why .thesis .punch{display:block;margin-top:11px;font-weight:600;color:var(--ink);font-size:15.5px}
+
+  /* ---- per-step "the lesson" callout + the evidence line, in the tour card ---- */
+  .lesson{margin:16px 0 0;padding:12px 15px;border-left:3px solid var(--accent-2);background:var(--accent-ghost);
+    border-radius:0 8px 8px 0;font-size:15px;color:var(--ink);font-style:italic;line-height:1.5}
+  .lesson b{font-family:var(--font-mono);font-style:normal;font-size:11px;text-transform:uppercase;
+    letter-spacing:.1em;color:var(--accent);display:block;margin-bottom:3px}
+  .evidence{margin:14px 0 0;font-family:var(--font-mono);font-size:12px;color:var(--ink-soft);line-height:1.6}
+  .evidence .ev-line{display:flex;gap:7px;align-items:baseline;margin-top:4px}
+  .evidence .ev-line:first-child{margin-top:0}
+  .evidence .ev{font-weight:700;flex:none}
+  .evidence .ev.v{color:#3f9e6b}
+  .evidence .ev.c{color:var(--accent)}
+
   footer{border-top:1px solid var(--line);padding:30px 0 50px;color:var(--ink-soft);font-size:13px}
   footer .mono{color:var(--ink)}
   @media (prefers-reduced-motion:reduce){.screen .cur{animation:none}}
@@ -296,6 +333,34 @@
 </header>
 
 <main class="wrap">
+  <!-- WHY THIS EXISTS / ANTI-SLOP -->
+  <section class="why">
+    <div class="why-in">
+      <div class="eyebrow">Read this first</div>
+      <h2>Why this exists — and why it <em>isn’t</em> AI slop</h2>
+      <p>The goal was never “how to build an OS.” It was turning abstractions you’ve only ever trusted into <span class="ink">mechanisms you can hold in your head</span>: a task is a saved stack pointer; a file is a header’s lie about flat bytes; a directory is that same lie one level down; preemption is the switch a task would make voluntarily, forced by a timer it can’t refuse — and a proof that validation <em>terminates</em> is not a proof that it’s <em>safe</em>.</p>
+      <p>Fair question in 2026: is this just a model that emitted a plausible-looking kernel? No — and here is the case, as three claims you can check yourself, not take on faith.</p>
+      <div class="claims">
+        <div class="claim">
+          <div class="k"><span class="mk">✓</span>Verified</div>
+          <p>Every milestone ships a <b>deterministic self-test, asserted by CI on boot</b>: a freed frame handed back out, a file’s exact bytes round-tripped, ten malformed disk images rejected — a directory cycle among them — with no hang.</p>
+        </div>
+        <div class="claim">
+          <div class="k"><span class="mk">⌕</span>Reviewed</div>
+          <p>Every milestone gets an <b>adversarial multi-agent code review</b> that found real latent bugs before shipping: a deadlock that only fires when the timer preempts a task mid-lock; a tree validator a crafted image could hang or stack-overflow.</p>
+        </div>
+        <div class="claim">
+          <div class="k"><span class="mk">≡</span>Honest</div>
+          <p>Every write-up documents <b>what broke, what was deferred, and the checks left un-done</b>. The dead ends are in the build log on purpose — not sanded off after the fact.</p>
+        </div>
+      </div>
+      <div class="thesis">
+        The claim isn’t “I hand-typed an operating system.” It’s a demonstration of what disciplined <b>AI-assisted systems engineering</b> looks like: the human owns the vision, the non-goals, and a mandatory <code>Think → Plan → Build → Review → Reflect</code> loop; the AI does the mechanical work inside that harness; and the whole trail — plans, reviews, self-tests, retros — is public, so the rigor is checkable, not asserted.
+        <span class="punch">Slop is what you get when you skip the harness. This is the harness.</span>
+      </div>
+    </div>
+  </section>
+
   <div class="bench">
     <!-- MACHINE -->
     <div class="machine-col">
@@ -582,72 +647,100 @@ make debug      # boot frozen, attach GDB</code>
      q:"What operating system is running underneath this one?",
      a:"None. There’s no Linux, no host OS inside the emulated machine — just this kernel on the bare (virtual) processor. v86 emulates a PC; the very first instruction it runs is our own boot code.",
      ex:"<p>A real PC powers on in a primitive 16/32-bit mode. Getting to modern 64-bit “long mode” is a specific ritual: verify the CPU can do it, build page tables, enable paging, flip the long-mode bit, and far-jump into a 64-bit code segment. We hand-wrote that in assembly so every instruction is understood, then handed control to Rust.</p>",
+     lesson:"“Bare metal” isn’t a metaphor — with nothing underneath, every convenience you rely on is a mechanism someone has to build first, starting with the very CPU mode you get to run in.",
+     proof:"the kernel executes at all past the long-mode switch — a mis-built page table there would have triple-faulted and silently rebooted instead of printing this.",
      links:[["boot/boot.asm","boot.asm"],["boot/long_mode_init.asm","long_mode_init.asm"]]},
     {n:"02", ms:"Milestone 3 · output", title:"How it talks with no OS to ask",
      watch:"The three green “[ok]” lines.",
      q:"With no operating system and no driver, how does a character appear on screen at all?",
      a:"By writing bytes to a fixed memory address. In VGA text mode, memory address 0xb8000 IS the screen — store a character byte and a color byte there, and the glyph appears. That’s the entire “graphics stack.”",
      ex:"<p>The writer keeps a cursor, handles newlines and scrolling, and writes each cell as <code>volatile</code> — the compiler must never optimize these away, because the “memory” is really hardware. Printing is just very deliberate poking at <code>0xb8000</code>.</p>",
+     lesson:"Output isn’t a service you call — it’s a place in memory you write to, and “a driver” is just the code that agrees on where.",
+     proof:"the three [ok] lines appear at all — each glyph is a byte written to 0xb8000, so the text on this screen is that path working.",
      links:[["src/vga_buffer.rs","vga_buffer.rs"]]},
     {n:"03", ms:"encoding", title:"The characters that couldn’t",
      watch:"The first line: “Ziran OS  --  ■■”.",
      q:"The source asks for 自然. Why do you see two boxes instead?",
      a:"Because the VGA font is a fixed ROM of 256 glyphs — basically ASCII plus some symbols. It has no glyph for 自 or 然, so the writer substitutes byte 0xFE (■) for any non-ASCII character rather than draw garbage.",
      ex:"<p>This is a tiny, honest lesson in the gap between <em>text</em> (abstract code points) and <em>glyphs</em> (pictures a device can actually draw). Unicode is enormous; this font knows 256 shapes. Bridging that gap is what fonts, encodings, and later a real framebuffer are for.</p>",
+     lesson:"Text and glyphs are different things: a code point is an idea, a glyph is a picture a device can actually draw, and the gap between them never fully closes.",
+     proof:"the two ■ boxes are byte 0xFE substituted for 自然 — the character-encoding boundary made visible on screen, not hidden.",
      links:[["src/vga_buffer.rs","vga_buffer.rs"]]},
     {n:"04", ms:"Milestone 4 · interrupts", title:"Failing on purpose",
      watch:"“triggering a test breakpoint” → “[trap] breakpoint (#BP) … handled.”",
      q:"What normally happens when a kernel hits an error it has no handler for?",
      a:"It escalates: fault → double fault → triple fault → the machine resets, with no message. That silent reboot is the most disorienting thing in early OS work. Here, the breakpoint is caught and execution continues.",
      ex:"<p>An <em>Interrupt Descriptor Table</em> maps each of 256 possible interrupts/exceptions to a handler. We fire <code>int3</code> deliberately; the table routes it, the handler prints and returns. Because it’s a self-inflicted, recoverable break, surviving it proves the table, the assembly entry stubs, and the return path are all correct.</p>",
+     lesson:"Robustness is a table you build before the fault, not a reaction after it — an error you have no entry for doesn’t crash loudly, it reboots silently.",
+     proof:"int3 is caught and execution resumes — [trap] breakpoint (#BP) … handled — proving the IDT, the assembly entry stubs, and the return path end to end.",
      links:[["src/interrupts.rs","interrupts.rs"],["docs/concepts/interrupts.md","interrupts.md (explainer)"]]},
     {n:"05", ms:"Milestone 5 · keyboard", title:"It listens now — try it",
      watch:"“keyboard is live — type something.” Click the screen and type.",
      q:"Is the CPU sitting in a loop asking “any key yet?” — or is it doing something else?",
      a:"Neither loop nor poll. The CPU is halted — genuinely asleep. Pressing a key raises a hardware interrupt (IRQ1) that wakes it just long enough to read the key and echo it, then it halts again. That’s how a real OS idles at near-zero power.",
      ex:"<p>The keyboard controller offers a <em>scancode</em> at I/O port 0x60 and raises IRQ1. The interrupt controller (PIC) — which we had to reprogram so its interrupts don’t collide with CPU exceptions — delivers it; the handler reads the byte, translates it (US layout, with shift), echoes it, and acknowledges the controller so the next key can come. Forget that acknowledgement and the keyboard dies after exactly one press.</p>",
+     lesson:"A responsive machine isn’t a busy one — the CPU is genuinely asleep, and the outside world wakes it; polling is the thing you avoid, not the thing you do.",
+     proof:"each key you press echoes — IRQ1 wakes the halted CPU, the handler reads port 0x60 and acknowledges the PIC; forget that ack and the keyboard dies after exactly one press.",
      links:[["src/keyboard.rs","keyboard.rs"],["src/pic.rs","pic.rs"],["docs/concepts/keyboard-and-pic.md","keyboard-and-pic.md (explainer)"]]},
     {n:"06", ms:"Milestone 6 · memory", title:"Learning what it has",
      watch:"The “[ok] physical memory: … MiB free in the frame allocator” line (the amount depends on the machine — the browser emulator has 64 MiB).",
      q:"How does the kernel know how much RAM the machine has — can it just start using memory from address 0 upward?",
      a:"No. Physical memory is a patchwork: real RAM, firmware-reserved regions, memory-mapped devices, and plain holes, all interleaved. The kernel can’t safely probe it — reading a device register has side effects. So the bootloader (GRUB), which surveyed the machine before our code ran, hands over a map, and the kernel manages only the parts marked usable.",
      ex:"<p>Usable RAM is chopped into 4 KiB <em>frames</em>, and a <em>bitmap allocator</em> tracks each one with a single bit — free or used. It hands a frame out, takes it back, and — the part that makes it a real allocator and not a counter — returns the <em>same</em> frame on the next request after you free it. It carefully reserves the frames it must never give away: frame 0 (null), the kernel’s own image, and the boot structure itself. This is the bottom of the memory stack; paging and the heap are built directly on it.</p>",
+     lesson:"The line between a counter and an allocator is reuse: anyone can hand out the next thing; the real work is taking it back and handing that same thing out again.",
+     proof:"a freed frame is handed straight back out on the next request — the self-test frees a frame and asserts the very same one is reused, not leaked.",
      links:[["src/frame_allocator.rs","frame_allocator.rs"],["src/multiboot.rs","multiboot.rs"],["docs/concepts/physical-memory.md","physical-memory.md (explainer)"]]},
     {n:"07", ms:"Milestone 7 · paging", title:"Building its own map of memory",
      watch:"The “[ok] paging: switched to kernel-built page tables” line.",
      q:"Up to now the CPU used physical addresses directly. What changes when the kernel turns on its own paging?",
      a:"Every address the CPU touches stops being a physical address and becomes a virtual one — translated to real RAM through page tables the kernel builds and controls. Using frames from the allocator it just stood up, the kernel constructs its own 4-level page tables, identity-maps physical memory, and switches CR3 from the bootloader’s tables to its own.",
      ex:"<p>Paging is the hardware trick underneath all modern memory management: a <em>virtual</em> address is walked through four levels of <em>page tables</em> to find the physical frame it maps to, and the kernel owns those tables. That’s what lets memory be placed where the kernel wants it and (next milestone) lets a heap grow into address space that no physical RAM sat at before.</p><p>The honesty here is in the switch itself: the moment the kernel loads <code>CR3</code> with its own top-level table, the very next instruction fetch is already translated by the new tables. If the kernel hadn’t correctly mapped its own code, that instruction would fault into a triple fault and reset the machine. Surviving the switch <em>is</em> the proof that it mapped itself correctly. It then exposes map/translate/unmap and self-tests them on the serial log.</p>",
+     lesson:"Some changes prove themselves: the kernel can’t half-switch its own address map — it either mapped its own code correctly and the next instruction runs, or it triple-faults on the spot.",
+     proof:"the kernel survives loading CR3 with its own page tables, and the map / translate / unmap self-test round-trips cleanly on the serial log.",
      links:[["src/paging.rs","paging.rs"],["src/frame_allocator.rs","frame_allocator.rs"],["docs/concepts/virtual-memory.md","virtual-memory.md (explainer)"]]},
     {n:"08", ms:"Milestone 8 · heap", title:"Memory it can grow at runtime",
      watch:"The “[ok] heap: dynamic allocation (Vec, Box, String) now works” line.",
      q:"Until now every piece of memory the kernel used was a fixed size, decided in advance. What does a heap add that changes?",
      a:"Room to allocate memory whose size isn’t known until the program runs. Before this, everything lived on the stack or in static storage — fixed at compile time. A heap is a pool the kernel can carve up on demand, so data structures can grow: a Vec that keeps appending, a String built up character by character, a Box that puts one value on the heap. All of them ask the same allocator for space.",
      ex:"<p>The kernel reserves a 1 MiB window of virtual address space at 1 GiB, maps its pages onto real frames (this is paging and the frame allocator from the last two milestones doing exactly what they were built for), and installs a linked-list free-list allocator as Rust’s <code>#[global_allocator]</code>. Once that’s in place, the <code>alloc</code> crate lights up and <code>Vec</code>, <code>Box</code>, and <code>String</code> work — with no operating system underneath, because <em>we are</em> the thing they’d normally call.</p><p>The honesty is in reclaim. A bump allocator that only ever hands out the next byte is easy — but it leaks: free something and the space is gone forever. A real allocator takes freed memory back and reuses it, which the self-test proves by allocating, freeing, and watching the same space get handed out again. That difference — reusing freed memory, not just leaking it — is what makes this an allocator and not a counter.</p>",
+     lesson:"Growable memory is a bookkeeping trick, not new hardware: the heap is just pages the kernel mapped, carved up by an allocator it wrote — and reclaim is the whole game.",
+     proof:"free an allocation, allocate again, and the SAME address (0x40000ff0) comes back — reclaim working, not a leak.",
      links:[["src/heap.rs","heap.rs"],["docs/concepts/heap.md","heap.md (explainer)"],["src/paging.rs","paging.rs"]]},
     {n:"09", ms:"Milestone 9 · timer + scheduling", title:"Running more than one thing at once",
      watch:"The “[ok] scheduler: two tasks share the CPU, switched by a 100 Hz timer” line.",
      q:"The CPU has one core and runs one instruction at a time. So how can it appear to run two tasks “at once” — and what has to be saved when it switches from one to the other?",
      a:"It doesn’t truly run them together. It runs one for a slice, then swaps to the other and back, fast enough to look simultaneous. The saved state is the whole trick: a task is just a saved stack pointer, so switching means storing the outgoing task’s stack pointer and its six callee-saved registers, loading the incoming task’s, and returning — which resumes exactly where that task last stopped. And the switch can be forced by a timer interrupt, so a task doesn’t even have to cooperate to be switched away from.",
      ex:"<p>There are two halves to this. First the <em>cooperative</em> version: each task runs until it voluntarily calls <code>yield_now</code>, which hands the CPU to the next one. Two workers taking turns produce a clean <code>ABABAB…</code> — proof they interleave, and that each one’s registers and heap values survive the switch untouched. But cooperation is fragile: a single task that never yields would freeze everything.</p><p>So the second half is <em>preemptive</em>: a Programmable Interval Timer (the PIT) is set to fire 100 times a second, and each tick’s interrupt runs the very same <code>switch_context</code> the task would have called itself. Now a task is interleaved whether it cooperates or not. The honest proof is a task that spins in an infinite loop with <em>no</em> yield at all — it still makes progress, and another task still runs, <em>only</em> because the timer keeps forcibly taking the CPU away from it. That single fact — progress without cooperation — is the difference between a scheduler and a polite convention.</p><details class='breakit'><summary>Break it: what if the timer handler forgets the EOI?</summary><div class='bd'><p>The <em>EOI</em> (end-of-interrupt) is the one line that tells the PIC “this tick is handled — send me the next one.” Comment out <code>pic::send_eoi(0)</code> in the timer handler, rebuild, and boot. Predict what changes before you open this.</p><pre>with the EOI:     preemption works … (<b>91</b> ticks elapsed)\nwithout the EOI:  preemption works … (<span class='dead'><b>1</b> tick elapsed — the clock died</span>)</pre><p>Without the acknowledgement, the PIC keeps IRQ0’s “in-service” bit set, waiting forever for a signal that never comes — so it delivers <em>exactly one</em> timer interrupt, then goes silent. This little self-test still limps to a pass, because its second task only needed a single nudge to finish — but the tick counter frozen at <code>1</code> is the tell. A workload that needs the timer to <em>keep</em> interrupting — two tasks in genuinely endless loops — freezes right after that first tick: no crash, no message, just a hang. It is the most common first-timer bug, and it is why the real handler sends the EOI <em>before</em> it switches tasks (<code>src/interrupts.rs</code>).</p></div></details>",
+     lesson:"A task is nothing but a saved stack pointer — “multitasking” is just swapping which stack the CPU returns into, and preemption is that same swap forced by a timer a task can’t refuse.",
+     proof:"two tasks that never yield still interleave — a task spinning in an infinite loop is forced off the CPU by the timer (95 ticks elapsed).",
+     caught:"a deadlock that only fires when the timer preempts a task mid-lock — the scheduler lock re-entered from inside the timer interrupt.",
      links:[["src/task.rs","task.rs"],["src/pit.rs","pit.rs"],["boot/switch.asm","switch.asm"],["docs/concepts/timer-and-scheduling.md","timer-and-scheduling.md (explainer)"]]},
     {n:"10", ms:"Milestone 10 · the shell", title:"The machine becomes something you type at",
      watch:"The “[ok] shell: interactive prompt online” line, then the ziran> prompt.",
      q:"A key press fires a hardware interrupt. But the interrupt handler runs for microseconds and can’t “run the shell.” So how does a keystroke actually reach a program that reads a whole line and runs a command?",
      a:"The interrupt is only a producer. It decodes the scancode, drops the byte into a lock-free ring, acknowledges the controller, and returns — microseconds, no more. The shell is a separate scheduled task, the consumer: it drains that ring, echoes each character, builds up a line, and on Enter dispatches a command. “Interactive” turns out to be nothing more than a task polling a queue an interrupt keeps filling.",
      ex:"<p>This is the <em>producer / consumer</em> split made concrete. The keyboard IRQ and the shell each touch only one end of a single-producer, single-consumer <em>ring buffer</em> of bytes, so no lock is needed at all — the handler can never block, which is the house rule for interrupt code. The IRQ <code>push</code>es a byte; the shell <code>pop</code>s it.</p><p>The shell is a task on the Milestone 9 scheduler, so it coexists with the idle task and is preempted by the timer like anything else. When its ring is empty it runs <code>hlt</code> — genuinely asleep — rather than spinning or yielding; a keystroke IRQ (or the next 100 Hz tick) wakes it. It knows five commands: <code>help</code>, <code>echo</code>, <code>clear</code>, <code>mem</code> (live frames, heap, and uptime), and <code>ps</code> — which lists the scheduler’s tasks and shows the shell itself sitting there as one of them.</p><details class='breakit'><summary>Break it: what if the IRQ echoed the key directly, like Milestone 5?</summary><div class='bd'><p>Milestone 5 echoed each key <em>inside</em> the keyboard handler. That was fine when the handler was the only thing that ever printed. But printing takes the VGA writer lock — and now the shell task prints too. Picture the timer preempting the shell <em>mid-print</em>, while it holds that lock, and a key arriving right then:</p><pre>shell task:   print(...) takes the VGA lock, then is <span class='dead'>preempted here — still holding it</span>\nkeyboard IRQ: fires, wants the VGA lock to echo — <span class='dead'>spins forever</span></pre><p>The handler would spin on a lock only the preempted task can release — but that task can’t run until the handler returns, and the handler never returns. A self-deadlock, and a silent hang. That is exactly why Milestone 10 moved echoing <em>out</em> of the IRQ and into the shell task: the handler now only drops a byte in the ring and returns, so it takes no lock at all.</p></div></details>",
+     lesson:"“Interactive” is not a feature, it’s an architecture: a producer interrupt that only enqueues, and a consumer task that does the slow work on its own time.",
+     proof:"the keyboard→ring→shell round-trip, the line editor, and the parser all verify with no keyboard attached (tasks=3).",
+     caught:"the shell growing its line buffer allocated while holding the scheduler lock with interrupts off — a task that could never be rescheduled to release it.",
      links:[["src/shell.rs","shell.rs"],["src/keyboard.rs","keyboard.rs"],["docs/concepts/input-and-shell.md","input-and-shell.md (explainer)"]]},
     {n:"11", ms:"Milestone 11 · the filesystem", title:"A file is a lie about flat bytes",
      watch:"The “[ok] fs: RAM disk mounted — ls and cat now work” line.",
      q:"The disk is just a flat run of bytes with no names anywhere in it. So what actually makes some of those bytes a file called motd.txt that you can cat?",
      a:"A small directory table at the very front of the disk — a list of {name, offset, length}. When you type “cat motd.txt”, the kernel looks up that name in the table, finds it means “the bytes at 80..93,” and hands you exactly that slice. A file is a lie the header tells about flat bytes; nothing more. There is no magic layer where files “really” exist.",
      ex:"<p>There are two sides to that lie, and they share no code. The <em>writer</em> is a tiny in-kernel <code>mkfs</code>: it packs a fixed set of files into one <code>Vec&lt;u8&gt;</code> on the heap — a <em>superblock</em> (magic <code>ZRFS</code>, version, file count, total size), then the <em>directory table</em> of <code>{name, offset, length}</code> entries, then the raw <em>data region</em> — writing every number as little-endian bytes. The <em>reader</em>, <code>mount</code>, gets only that flat array back and re-derives the whole directory from it, trusting nothing but the bytes; no struct is shared across the boundary.</p><p>The substance is in what <code>mount</code> <em>refuses</em>. It is the entire trust boundary, and it validates before <code>ls</code>/<code>cat</code> read a single byte: the magic signature, the version, the disk’s own size field against the real length, and — the headline check — that every entry’s <code>offset + length</code> stays inside the disk. Only if all of that holds does it return an <code>Fs</code> whose <code>list()</code> and <code>read()</code> are total and panic-free; <code>ls</code> and <code>cat</code> sit directly on those. It is all pure safe Rust over a heap slice — a bad offset is a caught <code>Err</code>, never a memory-safety bug.</p><details class='breakit'><summary>Break it: flip a byte in the magic, or point a file past the end of the disk?</summary><div class='bd'><p>The reader’s whole job is to <em>refuse a lie</em>, so feed it one. Corrupt the first byte of the <code>ZRFS</code> signature, or overwrite an entry’s offset field with <code>0xFFFFFFFF</code> so it points miles past the end of the disk, then mount. Predict what happens before you open this.</p><pre>good image:    mount() ok — ls lists 3 files, cat motd.txt prints “Hello, Ziran!”\nbad magic:     mount() → <span class='dead'>Err(BadMagic)</span> — ls: cannot mount filesystem\nbad offset:    mount() → <span class='dead'>Err(EntryOutOfBounds)</span> — cat: cannot mount filesystem</pre><p>Neither returns garbage, and neither reads a byte outside the disk — <code>mount</code> rejects the image up front and <code>ls</code>/<code>cat</code> report the error cleanly. Those five checks — <code>BadMagic</code>, <code>UnsupportedVersion</code>, <code>SizeMismatch</code>, <code>Truncated</code>, <code>EntryOutOfBounds</code> — <em>are</em> the filesystem’s trust boundary. The interesting work of a filesystem isn’t reading the bytes; it’s refusing to read a lie. The self-test proves exactly this: it mounts the good image, checks one file byte-for-byte, then feeds five malformed images and asserts each one is rejected with its specific error.</p></div></details>",
+     lesson:"A file is a lie a header tells about flat bytes; validation — refusing a lie that doesn’t check out — is the real work, not reading.",
+     proof:"motd.txt round-trips byte-for-byte and 5 malformed images are each rejected with their own error — bad magic, wrong version, size mismatch, truncated, out-of-bounds.",
+     caught:"a superblock size field the code claimed to cross-check but never did — a malformed image could lie about its own length (now the fifth rejection, SizeMismatch).",
      links:[["src/fs.rs","fs.rs"],["src/shell.rs","shell.rs"],["docs/concepts/filesystem.md","filesystem.md (explainer)"]]},
     {n:"12", ms:"Milestone 12 · the file manager", title:"The end goal: a directory is a lie too",
      watch:"The “[ok] file manager: cd, pwd, ls, cat over a directory tree” line.",
      q:"A file was a header’s lie about flat bytes. A folder has to live somewhere on that same flat disk — so what IS a directory, really?",
      a:"A directory is just a file whose bytes are more {name, offset, length} entries — the same lie, one level down. cd/ls walk that tree; a path like /docs/filesystem.txt is resolved by following named entries from the root, one component at a time. There is no new kind of thing underneath a folder, just the file lie told recursively.",
      ex:"<p>The last lie, and the neatest one: a <em>directory</em> is a file too. Its bytes aren’t text — they’re just more <code>{name, offset, length}</code> entries, and one entry whose region points at another such table instead of at data <em>is</em> a folder. So the whole tree is the Milestone 11 lie told recursively, and there is no new primitive to learn: <code>ls /docs</code> reads a table, <code>cat /docs/filesystem.txt</code> follows a named entry to a byte slice.</p><p>Reaching this closes the arc the whole project was walking: boot → memory → paging → heap → tasks → shell → files, each layer a small, knowable mechanism the one below it made possible. The shell now carries a <em>current directory</em> and grows <code>cd</code>/<code>pwd</code>/<code>ls</code>/<code>cat</code>; a path is resolved as pure string math (<code>.</code> and <code>..</code> never chase a parent pointer), then walked component by component from the root.</p><p>The substance, as ever, is in what <code>mount</code> <em>refuses</em>. A flat file only had to stay in-bounds; a <em>tree</em> supplied by an untrusted image can also loop, share tables, or nest arbitrarily deep — so validation has to be proven to <em>finish</em>. It is, by three cheap invariants: every child table must begin at or after a monotonically rising <em>high-water mark</em> (so tables are disjoint and strictly forward-ordered — no cycle or diamond can be re-walked), and depth is capped independently so a deep chain can’t overflow the guard-page-less kernel stack.</p><details class='breakit'><summary>Break it: point a folder back at itself, or nest the tree thousands deep?</summary><div class='bd'><p>The reader’s job is to refuse a lie, so hand it a tree that can’t be walked honestly: make a directory entry point back at the root table (a <em>cycle</em>), or two folders point at one child table (a <em>diamond</em>), or chain folders deeper than the depth cap. Predict what <code>mount</code> does before you open this.</p><pre>good tree:  mount() ok — cd /docs, ls, cat /docs/filesystem.txt all walk it\ncycle:      mount() → <span class='dead'>Err(DirNotForward)</span> — the back-edge sits below the high-water mark\ndiamond:    mount() → <span class='dead'>Err(DirNotForward)</span> — the re-seen table is rejected, not re-walked\n8000 deep:  mount() → <span class='dead'>Err(TooDeep)</span> — before the recursion can overflow the stack</pre><p>None of them hang and none overflow the stack — each is a clean, specific <code>Err</code>. And the lesson is sharper than “it works”: a proof that validation <em>terminates</em> is not a proof that it is <em>safe</em>. Bounded time, bounded stack, and bounded depth are three different guarantees, earned by three different mechanisms — conflate them and a tree that halts in theory still smashes the stack in practice. One honest gap remains on purpose: a <code>FLAG{…}</code> secret sits in the image with <em>no</em> directory entry — unreachable by <code>ls</code>/<code>cat</code>, and the exfiltration target a later milestone (M16) goes hunting for.</p></div></details>",
+     lesson:"A termination proof is not a safety proof: “it stops,” “it stops fast,” and “it stops without eating the stack” are three different guarantees, earned by three different mechanisms.",
+     proof:"10 malformed disk images rejected — a cycle, a deep chain, and a diamond DAG among them — with no hang and no stack overflow.",
+     caught:"a validator a crafted image could hang (a diamond DAG re-validating exponentially) or stack-overflow (a chain deeper than the kernel’s guard-page-less stack).",
      links:[["src/shell.rs","shell.rs"],["src/fs.rs","fs.rs"],["docs/concepts/filesystem.md","filesystem.md (explainer)"]]},
     {n:"13", ms:"what’s next", title:"The first wall: a program the kernel doesn’t trust",
      watch:"Milestone 12 of 12 — the core goal is reached. This is as far as the OS is built.",
@@ -705,6 +798,15 @@ make debug      # boot frozen, attach GDB</code>
       var href = l[0].indexOf("docs/blog")===0||l[0].indexOf("STATUS")===0 ? BLOB+l[0] : src(l[0]);
       return '<a href="'+href+'" target="_blank" rel="noopener"><span class="ic">↗</span>'+esc(l[1])+'</a>';
     }).join("");
+    var lessonHtml = s.lesson
+      ? '<div class="lesson"><b>The lesson</b>'+esc(s.lesson)+'</div>'
+      : '';
+    var evidenceHtml = '';
+    if(s.proof){
+      evidenceHtml = '<div class="evidence"><div class="ev-line"><span class="ev v">✓ verified on boot</span><span>'+esc(s.proof)+'</span></div>'+
+        (s.caught ? '<div class="ev-line"><span class="ev c">⚑ review caught</span><span>'+esc(s.caught)+'</span></div>' : '')+
+        '</div>';
+    }
     $("card").innerHTML =
       '<div class="step-n">STEP '+s.n+'</div>'+
       '<div class="ms">'+esc(s.ms)+'</div>'+
@@ -712,6 +814,8 @@ make debug      # boot frozen, attach GDB</code>
       '<div class="watch"><b>Watch for</b>'+esc(s.watch)+'</div>'+
       '<details class="predict"><summary>Predict: '+esc(s.q)+'</summary><div class="ans">'+esc(s.a)+'</div></details>'+
       '<div class="explain">'+s.ex+'</div>'+
+      lessonHtml+
+      evidenceHtml+
       '<div class="links">'+links+'</div>';
     $("prev").disabled = idx===0;
     $("next").textContent = idx===STEPS.length-1 ? "Start over ↺" : "Next →";
