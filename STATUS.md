@@ -23,7 +23,7 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started
 | 13 | Userspace / syscalls (stretch) | ⬜ | First real privilege boundary — enables the security track. |
 | 14 | Networking stub (stretch) | ⬜ | |
 | 15 | Break the privilege boundary (security) | ⬜ | Adversarial self-testing; needs M13. See `/red-team` + PLAN.md §8. |
-| 16 | Break the filesystem boundary (security) | ⬜ | Needs M11–12. |
+| 16 | Break the filesystem boundary (security) | ⬜ | Needs M11–12. Objective: **exfiltrate a hidden secret** (bytes on the RAM disk with no directory entry) by aliasing them past a file's extent — targets M11's deliberately-loose extent check. Groundwork (the hidden bytes) is planted in M12's `mkfs`. See PLAN §8. |
 | — | Teaching tool (`web/`) | 🚧 | Dual-mode v86 embed + predict→observe→explain tour, covering M0–11 (with "break it" experiments on the M9/M10/M11 steps). Grows one step per milestone. See `web/README.md`. |
 
 ## Verification state

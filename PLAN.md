@@ -132,7 +132,7 @@ Each milestone = one working, demoable state + one blog post. Live status is tra
 | 13 (stretch) | Userspace / syscalls | Basic ring 3 separation, a minimal syscall interface | stretch post |
 | 14 (stretch) | Networking stub | Loopback or a trivial virtio-net driver, "hello" over a socket | stretch post |
 | 15 (security) | Break the privilege boundary | From ring 3, deliberately attempt to read kernel memory / execute privileged instructions / pass bad syscall args — and watch the CPU + kernel stop you (or find where they don't) | "Trying to break out of my own jail" |
-| 16 (security) | Break the filesystem boundary | Craft inputs that make the FS read/write outside a file's bounds; fuzz the parser; try to reach data a caller shouldn't | "Attacking the lies about disk layout" |
+| 16 (security) | Break the filesystem boundary | Craft inputs that make the FS read/write outside a file's bounds; fuzz the parser; **exfiltrate the hidden secret** planted with no directory entry (see §8) by aliasing its bytes past a file's extent | "Attacking the lies about disk layout" |
 | — | Teaching tool (`web/`) | v86 embed + guided predict→observe→explain tour; grows one step per milestone | "You can boot it right here — and learn how it works" |
 
 **Realistic pacing (hobbyist, part-time):** Milestones 0–3 are a focused weekend-to-two-weeks. Milestones 4–9 are the long middle — months of intermittent work, with stretches of no visible progress while a single bug is chased. Milestones 10–12 move faster once memory and interrupts are solid.
@@ -175,6 +175,29 @@ author's own hardware/VM — authorized testing of a system you fully own:
   forgot. (This is the classic "confused deputy" surface.)
 - **Filesystem/parser fuzzing.** Feed the FS deliberately corrupt structures and
   boundary-case inputs; try to read or write outside a file's extent.
+
+**The objective: a flag to capture.** To make the track concrete rather than
+abstract, the OS carries a **secret to exfiltrate** — a "password"/flag that a
+boundary is *supposed* to keep out of reach, so success is unambiguous: you
+either retrieved it or you didn't. Two placements, one per boundary:
+
+- **Filesystem boundary (M16).** A secret is planted on the RAM disk as **bytes
+  with no directory entry** — present in the image but unreachable by normal
+  `ls`/`cat`, because nothing names them. The challenge: craft a malformed image
+  or entry whose `offset + length` **aliases the hidden bytes** and makes the FS
+  hand them back. This directly targets the deliberately-loose check documented
+  in M11's `mount` (extents are validated to be *in the image*, not *within a
+  file's own region* — see `docs/planning/milestone-11-eng-plan.md`), turning
+  "should I tighten that?" into a decision you can *feel*: tighten it and the flag
+  is safe; leave it and the flag leaks. **Groundwork is planted in M12** (the
+  hidden bytes go into the `mkfs` image); the attack is M16.
+- **Privilege boundary (M15).** The analogue once ring 3 exists: a secret in a
+  kernel-only page that a userspace process tries to read, testing whether page
+  permissions and the ring boundary actually stop it.
+
+The flag is a *teaching device* on your own OS — authorized self-testing, not
+real security. Capturing it (or proving it can't be) is the milestone; the write-
+up of *why* the boundary held or failed is the blog post.
 
 **The mindset (see the `red-team` skill).** Think in terms of the boundary being
 tested, the specific invariant an attack would violate, and what observable proof
