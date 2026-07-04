@@ -111,6 +111,11 @@ pub fn self_test() {
         UVA_STACK_TOP
     );
 
+    // Clear the violation record so we can prove the excursion ended cleanly (via
+    // SYS_EXIT), not by the blob spuriously faulting into the ring-3 recovery arm
+    // — otherwise "returned to ring 0" would be true even if the blob never ran.
+    LAST_VIOLATION.store(0, Ordering::SeqCst);
+
     // The excursion must be atomic w.r.t. the timer. Ring 3 runs with IF=0, but
     // the ring-0 setup/return runs after `sti`, so a tick could otherwise preempt
     // `usermode_enter` mid-frame — and there is no ring-3 save/restore path yet
@@ -123,6 +128,16 @@ pub fn self_test() {
         usermode_enter(UVA_CODE, UVA_STACK_TOP);
     }
     interrupts::restore(was);
+
+    // The blob's exit path must have been SYS_EXIT, not a caught fault — a fault
+    // would have set LAST_VIOLATION via `recover_from_violation`. This distinguishes
+    // "the round-trip worked" from "the blob #PF'd on its first instruction and we
+    // recovered anyway" (office-hours Q4: working vs. accidentally working).
+    assert_eq!(
+        LAST_VIOLATION.load(Ordering::SeqCst),
+        0,
+        "the ring-3 excursion ended in a fault, not a clean SYS_EXIT"
+    );
 
     serial_println!("[ok] returned to ring 0 from the userspace excursion — round-trip intact");
 

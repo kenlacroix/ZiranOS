@@ -307,7 +307,22 @@ pub fn map_page(virt: u64, phys: u64, flags: u64) -> Result<(), MapError> {
 /// identity map. That is safe: setting U/S on an upper entry only *permits* user
 /// access to continue downward; the kernel's own leaves stay U/S=0, so no kernel
 /// page becomes user-readable. (This is exactly what keeps the M15 secret safe.)
+///
+/// Two properties to know: (1) the U/S loosening of a shared upper entry
+/// (`PML4[0]`, and the heap's `PDPT[1]`) is **permanent** — [`unmap_page`] clears
+/// only the leaf, never the parents — so once any user page has been mapped, a
+/// later M15 secret placed *under* those entries stays protected only by its own
+/// U/S=0 leaf; keep it that way. (2) `virt` MUST lie above the 1 GiB identity
+/// window: the identity map uses 2 MiB huge pages, so a user VA below 1 GiB would
+/// loosen `PML4[0]`/`PDPT[0]` on the way down and *then* fail with
+/// [`MapError::HugePage`] at the PD, leaving those shared entries loosened for a
+/// call that returned an error. The assert makes that misuse loud instead.
 pub fn map_user_page(virt: u64, phys: u64, flags: u64) -> Result<(), MapError> {
+    assert!(
+        virt >= IDENTITY_LIMIT,
+        "map_user_page: user VA {:#x} must be above the 1 GiB identity window",
+        virt
+    );
     map_inner(virt, phys, flags, true)
 }
 

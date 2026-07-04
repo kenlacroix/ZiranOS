@@ -259,6 +259,10 @@ pub extern "C" fn interrupt_dispatch(ctx: &mut InterruptContext) {
         // CPU stopping it *is* the boundary working. Report it — with the faulting
         // CS proving CPL 3 — then unwind the excursion back to ring 0 rather than
         // halting the kernel (a ring-0 fault below still halts, being a real bug).
+        // Scope: only #GP/#PF are contained (all the M13 blobs raise). Any *other*
+        // ring-3 fault (#UD, #DE, …) falls through to the halt arm below — fine for
+        // this cut, but broadening ring-3 containment is future work once real user
+        // programs run.
         v @ (13 | 14) if ctx.cs & 3 == 3 => {
             let name = EXCEPTIONS.get(v).copied().unwrap_or("exception");
             println!(

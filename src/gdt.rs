@@ -111,7 +111,9 @@ impl Tss {
     }
 }
 
-/// The GDT: `GDT_LEN` raw 64-bit descriptor slots. 16-byte aligned like the IDT.
+/// The GDT: `GDT_LEN` raw 64-bit descriptor slots. A `[u64; _]` is 8-byte
+/// aligned, which is all `lgdt` needs (the SDM only recommends 8-byte alignment
+/// for the GDT base).
 static mut GDT: [u64; GDT_LEN] = [0; GDT_LEN];
 /// Our single, static TSS — `lgdt`/`ltr` store only *pointers* to these, so the
 /// memory must never move or be freed. `static` guarantees that.
