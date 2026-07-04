@@ -49,8 +49,12 @@
     Module['arguments'] = [
       '-nographic',                 // no display; routes the first serial (COM1) to the pty
       '-m', '128M',
-      '-L', 'pack/',                // QEMU firmware dir (pc-bios), packaged into out.data
-      '-cdrom', 'pack/ziran.iso',   // our bootable image, packaged into out.data
+      '-L', 'pack/',                // QEMU firmware dir (pc-bios), incl. multiboot.bin
+      // Load the kernel DIRECTLY via multiboot — the flat binary carries an MB1
+      // a.out-kludge header + our trampoline, so QEMU places it at 0x100000 and
+      // jumps to it. Skips SeaBIOS/GRUB/disk entirely: QEMU-WASM's block-device
+      // read is unreliable, and GRUB only writes to VGA (invisible over serial).
+      '-kernel', '/kernel-v86.bin',
       '-accel', 'tcg,tb-size=500',  // software emulation — the browser has no KVM
       '-no-reboot',
     ];
@@ -77,9 +81,15 @@
       });
     }
 
-    status('loading emulator from ' + BASE + ' …');
     (async () => {
-      await loadScript(BASE + 'load.js');                        // classic script; sets Module.preRun
+      // Fetch the flat kernel (small, same-origin) and write it into the FS in
+      // preRun, before load.js appends the pc-bios package to preRun.
+      status('loading kernel …');
+      const kbytes = new Uint8Array(await (await fetch('./kernel-v86.bin')).arrayBuffer());
+      Module['preRun'] = [() => Module.FS.writeFile('/kernel-v86.bin', kbytes)];
+
+      status('loading emulator from ' + BASE + ' …');
+      await loadScript(BASE + 'load.js');                        // classic script; appends the pc-bios package to preRun
       const initEmscriptenModule = (await import(BASE + 'out.js')).default;  // MODULARIZE default export
       await initEmscriptenModule(Module);
       // Poll shim from the qemu-wasm sample — keeps keystrokes responsive.

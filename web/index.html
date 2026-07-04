@@ -1045,7 +1045,7 @@ make debug      # boot frozen, attach GDB</code>
   // The live boot (real QEMU in WASM + xterm-pty) lives on its own page,
   // qemu-wasm.html — it needs the ~46 MB assets built by web/build-qemu-wasm.sh.
   // Hidden until QEMU_WASM_READY is flipped on (once the assets are staged).
-  var QEMU_WASM_READY = false;
+  var QEMU_WASM_READY = true;
   (function(){
     var btn = $("boot-real");
     if(!btn) return;
