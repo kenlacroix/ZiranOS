@@ -31,11 +31,17 @@ use alloc::vec::Vec;
 /// The signature at offset 0: ASCII `ZRFS`. The first thing `mount` checks.
 const MAGIC: [u8; 4] = *b"ZRFS";
 /// The only on-disk format version this reader understands. v2 added the `kind`
-/// byte (subdirectories, Milestone 12); a v1 image now mounts as
-/// `UnsupportedVersion` (we keep only the current reader).
-const VERSION: u16 = 2;
+/// byte (subdirectories, Milestone 12); v3 gives meaning to the reserved word as
+/// `data_end` (the data-region ceiling that confines file extents — Milestone 16).
+/// An older image now mounts as `UnsupportedVersion` (we keep only the current
+/// reader). Each milestone grows the format by exactly one field.
+const VERSION: u16 = 3;
 /// Superblock size, in bytes. The directory table starts right after it.
 const SUPERBLOCK_LEN: usize = 16;
+/// Superblock field: `u32` at 0x0C, the exclusive end of the addressable data
+/// region. Was v2's reserved word; v3 confines every file extent to `<= data_end`
+/// so bytes past it (the planted secret) are unreachable through any entry.
+const SB_DATA_END: usize = 0x0C;
 /// Directory-entry size, in bytes.
 const DIRENT_LEN: usize = 32;
 /// Filename field width within a directory entry (NUL-padded).
@@ -71,6 +77,18 @@ pub enum FsError {
     /// overflows). The headline safety check: without it `read` would slice out
     /// of bounds.
     EntryOutOfBounds,
+    /// A **file** extent ends past `data_end` — inside the image, but outside the
+    /// addressable data region, so it aliases the reserved bytes where the hidden
+    /// secret lives. The Milestone 16 confinement check: `EntryOutOfBounds` keeps a
+    /// read in the image; *this* keeps it inside the file data. Only the strict
+    /// [`Fs::mount`] raises it; the loose [`Fs::mount_loose`] (the M11-era check)
+    /// does not — which is exactly how the flag leaks.
+    ExtentEscapesData,
+    /// The superblock's `data_end` field is itself out of range (`> total_size` or
+    /// `< SUPERBLOCK_LEN`). A malformed header, caught before it's trusted as the
+    /// extent ceiling. (Note: a *valid-but-forged* `data_end` is not caught — see
+    /// `Fs::mount`'s honest caveat.)
+    BadDataEnd,
     /// A subdirectory's region length is not a whole number of 32-byte entries.
     BadDirLength,
     /// A subdirectory's region does not start at/after the end of its parent —
@@ -115,10 +133,46 @@ pub struct Fs<'a> {
 }
 
 impl<'a> Fs<'a> {
-    /// Parse and *fully validate* an image. This is the whole trust boundary:
-    /// every bound is checked here, in order, each mapping to one [`FsError`], so
-    /// [`list`](Fs::list)/[`read`](Fs::read) can be total.
+    /// Parse and *fully validate* an image (the strict reader — the whole trust
+    /// boundary). Every bound is checked here, in order, each mapping to one
+    /// [`FsError`], so [`list`](Fs::list)/[`read`](Fs::read) can be total. This
+    /// confines every entry's extent — file data *and* directory tables — to
+    /// `[.., data_end)`, so bytes past the declared data region (the planted secret)
+    /// are unreachable through any entry.
+    ///
+    /// **Honest caveat (Milestone 16).** `data_end` lives *in the image*, so an
+    /// attacker who can rewrite the whole **superblock** (not just a directory
+    /// entry) could forge `data_end = total_size` and reopen the leak. `mount`
+    /// confines the *entry* attack surface — the classic "corrupt a directory
+    /// entry" case, and the documented M16 gap — and range-checks `data_end`, but
+    /// it cannot make an in-image field trustworthy against a fully-forged header.
+    /// Fully closing it needs structural coverage accounting or an out-of-band
+    /// authority (out of scope). This is M15's deepest lesson one layer down:
+    /// validating against a value the caller controls is not validation.
     pub fn mount(image: &'a [u8]) -> Result<Fs<'a>, FsError> {
+        Self::mount_inner(image, true)
+    }
+
+    /// The **deliberately loose** reader: identical to [`mount`](Fs::mount) except
+    /// it does *not* confine entry extents to `data_end` — it bounds them only by
+    /// the image length, exactly as the Milestone 11 extent check did. (It still
+    /// runs every other v3 check, including `data_end`'s range validation, so it is
+    /// not a full M11 reader — only its *extent* rule is the loose one.) Kept so the
+    /// M16 self-test can drive the *same* crafted image through both readers and
+    /// watch the flag leak here and be contained by `mount`. This is a teaching
+    /// device (like M15's `SYS_WRITE_UNCHECKED`); it must never be the reader a
+    /// real system trusts. The one-line difference from `mount` — the extent
+    /// ceiling — *is* the milestone.
+    pub fn mount_loose(image: &'a [u8]) -> Result<Fs<'a>, FsError> {
+        Self::mount_inner(image, false)
+    }
+
+    /// Shared parse for [`mount`](Fs::mount) (`confine = true`) and
+    /// [`mount_loose`](Fs::mount_loose) (`confine = false`). The only behavioural
+    /// difference is whether a file extent is ceilinged by `data_end` or by the
+    /// image length — everything else (magic, version, sizes, the directory tree's
+    /// disjoint/forward/depth validation) is identical.
+    fn mount_inner(image: &'a [u8], confine: bool) -> Result<Fs<'a>, FsError> {
         if image.len() < SUPERBLOCK_LEN {
             return Err(FsError::Truncated);
         }
@@ -133,6 +187,13 @@ impl<'a> Fs<'a> {
         if read_u32_le(image, 0x08) as usize != image.len() {
             return Err(FsError::SizeMismatch);
         }
+        // The data-region ceiling (v3). It must lie within the image and past the
+        // superblock; a malformed value is rejected before it's trusted as a bound.
+        // (A valid-but-forged value is not caught — see `mount`'s caveat.)
+        let data_end = read_u32_le(image, SB_DATA_END) as usize;
+        if data_end < SUPERBLOCK_LEN || data_end > image.len() {
+            return Err(FsError::BadDataEnd);
+        }
         let file_count = read_u16_le(image, 0x06) as usize;
 
         // The directory table must fit. `checked_mul`/`checked_add` guard the
@@ -144,21 +205,20 @@ impl<'a> Fs<'a> {
         }
 
         // Validate the whole directory tree, rooted at the root table. Every
-        // entry's extent is checked in-bounds (as in v1); every subdirectory is
-        // recursed into, but only if its table starts at/after `high_water` (the
-        // end of every table seen so far). That single monotone invariant makes
-        // tables globally disjoint and forward-ordered, so validation is linear
-        // and can't loop, blow up exponentially on a DAG, or cycle; a separate
-        // `MAX_DEPTH` cap keeps a deep chain from overflowing the stack. See
-        // `validate_dir`.
+        // entry's extent is checked in-bounds; every subdirectory is recursed into,
+        // but only if its table starts at/after `high_water` (the end of every
+        // table seen so far). That single monotone invariant makes tables globally
+        // disjoint and forward-ordered, so validation is linear and can't loop,
+        // blow up exponentially on a DAG, or cycle; a separate `MAX_DEPTH` cap keeps
+        // a deep chain from overflowing the stack. See `validate_dir`.
         //
-        // Still-deliberate non-checks (M16 seeds): a FILE extent is checked
-        // in-bounds but not confined to the data region and may alias another
-        // file's or the metadata's bytes — the hidden secret is safe against
-        // *navigation* but a crafted file entry could point at it. Only directory
-        // *tables* are kept from overlapping.
+        // M16: when `confine`, a FILE extent must also end at/before `data_end` —
+        // closing the gap where a crafted entry aliases the reserved bytes (the
+        // secret). The floor (a file may still alias metadata or another file's
+        // bytes below `data_end`) is left as a documented red-team/fuzzing target.
         let mut high_water = SUPERBLOCK_LEN;
-        validate_dir(image, SUPERBLOCK_LEN, file_count * DIRENT_LEN, &mut high_water, 0)?;
+        let ceiling = if confine { data_end } else { image.len() };
+        validate_dir(image, SUPERBLOCK_LEN, dir_bytes, &mut high_water, 0, ceiling)?;
 
         Ok(Fs { image, file_count })
     }
@@ -264,6 +324,7 @@ fn validate_dir(
     len: usize,
     high_water: &mut usize,
     depth: usize,
+    extent_ceiling: usize,
 ) -> Result<(), FsError> {
     if depth > MAX_DEPTH {
         return Err(FsError::TooDeep); // a crafted deep chain — do not overflow the stack
@@ -288,9 +349,24 @@ fn validate_dir(
         if c_end > image.len() {
             return Err(FsError::EntryOutOfBounds);
         }
+        // M16: confine *every* entry's extent to the data region — under the strict
+        // `mount`, `extent_ceiling` is `data_end`, so any extent reaching into the
+        // reserved `[data_end, total)` bytes (where the secret lives) is rejected
+        // here. Under `mount_loose`, `extent_ceiling` is the image length, so this is
+        // a no-op (already guaranteed above) — the M11 behaviour, and the leak.
+        //
+        // Applied to directories too, not just files: a `KIND_DIR` table also may
+        // not sit past `data_end`. That closes the scope asymmetry the M16 red-team
+        // flagged (a dir table in the reserved region was un-exploitable here only by
+        // the accident that the 25-byte secret doesn't parse as 32-byte entries — an
+        // accident of the data, not a check). Legit tables live well below `data_end`,
+        // so this costs a valid image nothing.
+        if c_end > extent_ceiling {
+            return Err(FsError::ExtentEscapesData);
+        }
         match read_u32_le(image, base + ENT_KIND) {
-            KIND_FILE => {} // a file's region only has to be in-bounds
-            KIND_DIR => validate_dir(image, c_off, c_len, high_water, depth + 1)?,
+            KIND_FILE => {} // extent already confined above
+            KIND_DIR => validate_dir(image, c_off, c_len, high_water, depth + 1, extent_ceiling)?,
             _ => return Err(FsError::BadKind),
         }
     }
@@ -329,7 +405,7 @@ fn write_entry(img: &mut Vec<u8>, name: &str, offset: u32, length: u32, kind: u3
     img.extend_from_slice(&kind.to_le_bytes()); // +0x1C kind
 }
 
-/// Build the boot RAM disk: a valid ZranFS **v2 tree**. This is the *writer* — it
+/// Build the boot RAM disk: a valid ZranFS **v3 tree**. This is the *writer* — it
 /// shares no structs with [`Fs`], just lays down little-endian bytes. The tree is:
 ///
 /// ```text
@@ -351,9 +427,12 @@ pub fn boot_image() -> Vec<u8> {
     ];
     let docs_files: &[(&str, &[u8])] = &[
         ("filesystem.txt", b"A file is a lie a header tells about bytes.\n"),
-        ("shell.txt", b"cd, pwd, ls, cat -- navigation over ZranFS v2.\n"),
+        ("shell.txt", b"cd, pwd, ls, cat -- navigation over ZranFS v3.\n"),
     ];
     // The planted secret: bytes with no directory entry pointing at them (§8).
+    // `self_test`'s M16 attack independently re-declares this exact literal (writer
+    // and test share no types); the two MUST stay byte-identical, or the crafted
+    // extent length / byte-equality assert there fails and boot panics.
     const SECRET: &[u8] = b"FLAG{ziran-boundary-leak}";
 
     let root_count = root_files.len() + 1; // + the docs/ directory entry
@@ -365,16 +444,20 @@ pub fn boot_image() -> Vec<u8> {
 
     let data_total: usize = root_files.iter().map(|(_, b)| b.len()).sum::<usize>()
         + docs_files.iter().map(|(_, b)| b.len()).sum::<usize>();
-    let total = data_off + data_total + SECRET.len();
+    // `data_end` is where addressable file data stops and the reserved region (the
+    // secret) begins. The strict `mount` confines every file extent to `<= data_end`,
+    // so the secret in `[data_end, total)` is unreachable through any entry.
+    let data_end = data_off + data_total;
+    let total = data_end + SECRET.len();
 
     let mut img = Vec::with_capacity(total);
 
-    // Superblock.
+    // Superblock (v3: the reserved word is now `data_end`).
     img.extend_from_slice(&MAGIC);
     img.extend_from_slice(&VERSION.to_le_bytes());
     img.extend_from_slice(&(root_count as u16).to_le_bytes());
     img.extend_from_slice(&(total as u32).to_le_bytes());
-    img.extend_from_slice(&0u32.to_le_bytes()); // reserved
+    img.extend_from_slice(&(data_end as u32).to_le_bytes()); // 0x0C data_end (v3)
 
     // Root table. Data offsets accumulate as we go: root files' data comes first
     // (right after both tables), then docs files' data.
@@ -408,11 +491,13 @@ pub fn boot_image() -> Vec<u8> {
 
 /// Prove the filesystem over serial, deterministically, with no keyboard: mount
 /// the boot image, navigate the directory tree and check a file's *exact* bytes,
-/// confirm the planted secret is unreachable, and — the honest gate — reject
-/// eight deliberately-corrupt images, each with its specific error. A reader that
-/// returns the right bytes on a good image, refuses eight malformations (a
-/// directory *cycle* among them, without looping), and cannot reach the hidden
-/// bytes is provably parsing, not coincidentally working.
+/// confirm the planted secret is unreachable by navigation, reject the
+/// deliberately-corrupt images (a directory *cycle* among them, without looping),
+/// and — the Milestone 16 payload — **capture the hidden flag** through the loose
+/// reader and watch the strict reader (`data_end` confinement) contain it. A reader
+/// that returns the right bytes on a good image, refuses every malformation, and
+/// leaks the secret only when its extent check is loosened is provably parsing —
+/// and the flag capture makes the boundary a thing you can feel, not assert.
 pub fn self_test() {
     let image = boot_image();
 
@@ -509,7 +594,7 @@ pub fn self_test() {
         img.extend_from_slice(&VERSION.to_le_bytes());
         img.extend_from_slice(&1u16.to_le_bytes()); // root has 1 entry
         img.extend_from_slice(&(total as u32).to_le_bytes());
-        img.extend_from_slice(&0u32.to_le_bytes());
+        img.extend_from_slice(&(total as u32).to_le_bytes()); // data_end = total (no reserved region); TooDeep trips first
         for k in 0..levels {
             if k == levels - 1 {
                 write_entry(&mut img, "d", (total - 1) as u32, 1, KIND_FILE); // tail: a 1-byte file
@@ -535,7 +620,7 @@ pub fn self_test() {
         img.extend_from_slice(&VERSION.to_le_bytes());
         img.extend_from_slice(&2u16.to_le_bytes()); // root has 2 entries
         img.extend_from_slice(&(total as u32).to_le_bytes());
-        img.extend_from_slice(&0u32.to_le_bytes());
+        img.extend_from_slice(&(total as u32).to_le_bytes()); // data_end = total; DirNotForward trips first
         write_entry(&mut img, "a", child as u32, (2 * DIRENT_LEN) as u32, KIND_DIR);
         write_entry(&mut img, "b", child as u32, (2 * DIRENT_LEN) as u32, KIND_DIR);
         write_entry(&mut img, "x", data as u32, 1, KIND_FILE);
@@ -546,10 +631,104 @@ pub fn self_test() {
     assert_eq!(Fs::mount(&diamond).err(), Some(FsError::DirNotForward));
 
     crate::serial_println!(
-        "[ok] fs: mounted a v2 tree ({} root entries incl. docs/), read /docs/filesystem.txt \
-         byte-for-byte, secret unreachable, 10 corrupt images rejected (cycle, deep chain, and \
-         diamond DAG among them -- no hang, no stack overflow)",
+        "[ok] fs: mounted a v3 tree ({} root entries incl. docs/), read /docs/filesystem.txt \
+         byte-for-byte, secret unreachable by navigation, 10 corrupt images rejected (cycle, deep \
+         chain, and diamond DAG among them -- no hang, no stack overflow)",
         root.len()
     );
     crate::serial_println!("M11: filesystem online");
+
+    // --- Milestone 16: break the filesystem boundary (flag capture) ---
+    // The planted secret lives in [data_end, total), past the addressable data
+    // region. Navigation can't reach it (asserted above). But a crafted *file
+    // entry* whose extent aliases those bytes is the exfil path: the loose reader
+    // (M11's in-image-only check) hands them back; the strict reader confines the
+    // extent to data_end and rejects it. Same crafted image, one check apart. The
+    // writer and this test independently know the flag (they share no types).
+    const SECRET: &[u8] = b"FLAG{ziran-boundary-leak}";
+    let data_end = read_u32_le(&image, SB_DATA_END) as usize;
+    let e0 = SUPERBLOCK_LEN; // root entry 0's base offset
+
+    // Craft the attack: repoint root entry 0 to a file named "leak" whose extent is
+    // exactly the secret's byte range [data_end, data_end + SECRET.len()) == the tail.
+    let mut craft = image.clone();
+    let mut namebuf = [0u8; NAME_LEN];
+    namebuf[..4].copy_from_slice(b"leak");
+    craft[e0..e0 + NAME_LEN].copy_from_slice(&namebuf);
+    craft[e0 + ENT_OFFSET..e0 + ENT_OFFSET + 4].copy_from_slice(&(data_end as u32).to_le_bytes());
+    craft[e0 + ENT_LENGTH..e0 + ENT_LENGTH + 4].copy_from_slice(&(SECRET.len() as u32).to_le_bytes());
+    craft[e0 + ENT_KIND..e0 + ENT_KIND + 4].copy_from_slice(&KIND_FILE.to_le_bytes());
+
+    // (2) LEAK: the loose reader accepts the aliasing extent; read hands back the
+    //     secret. Assert byte-equality with the planted flag — a real capture.
+    let leaked_fs = Fs::mount_loose(&craft).expect("m16: loose mount should accept the crafted image");
+    let leaked = leaked_fs.read_path("/leak").expect("m16: /leak unreadable under loose mount");
+    assert_eq!(leaked, SECRET, "m16: the loose reader must leak the exact planted flag");
+    crate::serial_println!(
+        "[m16] CAPTURED: a crafted file extent aliased the secret -> loose mount leaked {:?}",
+        core::str::from_utf8(leaked).unwrap_or("<non-utf8>")
+    );
+
+    // (3) CONTAINED: the strict reader confines the same extent to data_end.
+    assert_eq!(
+        Fs::mount(&craft).err(),
+        Some(FsError::ExtentEscapesData),
+        "m16: the strict reader must reject the extent that escapes the data region"
+    );
+    crate::serial_println!(
+        "[m16] CONTAINED: strict mount rejected the escaping extent (ExtentEscapesData) -- flag safe"
+    );
+
+    // Boundary: an extent ending exactly at data_end is legal; one byte past is not.
+    let mut edge_ok = image.clone();
+    edge_ok[e0 + ENT_OFFSET..e0 + ENT_OFFSET + 4].copy_from_slice(&((data_end - 1) as u32).to_le_bytes());
+    edge_ok[e0 + ENT_LENGTH..e0 + ENT_LENGTH + 4].copy_from_slice(&1u32.to_le_bytes());
+    assert!(Fs::mount(&edge_ok).is_ok(), "m16: an extent ending exactly at data_end must pass");
+    let mut edge_bad = image.clone();
+    edge_bad[e0 + ENT_OFFSET..e0 + ENT_OFFSET + 4].copy_from_slice(&(data_end as u32).to_le_bytes());
+    edge_bad[e0 + ENT_LENGTH..e0 + ENT_LENGTH + 4].copy_from_slice(&1u32.to_le_bytes());
+    assert_eq!(
+        Fs::mount(&edge_bad).err(),
+        Some(FsError::ExtentEscapesData),
+        "m16: one byte past data_end must be rejected"
+    );
+
+    // A malformed data_end (past total_size) is caught before it's trusted as a bound.
+    let mut bad_de = image.clone();
+    bad_de[SB_DATA_END..SB_DATA_END + 4].copy_from_slice(&0xFFFF_FFFFu32.to_le_bytes());
+    assert_eq!(Fs::mount(&bad_de).err(), Some(FsError::BadDataEnd));
+
+    // The confinement covers *directory* tables too, not just file extents — the
+    // red-team's scope-asymmetry finding, now a pinned invariant. A synthetic image
+    // whose one root entry is a DIR whose table sits past `data_end` must be rejected
+    // (the boot image's 25-byte secret is too small to host a 32-byte table past
+    // data_end, so this needs a bespoke image to exercise the KIND_DIR ceiling).
+    let dir_escape = {
+        let total = SUPERBLOCK_LEN + 2 * DIRENT_LEN; // superblock + root table + a child-table region
+        let child_off = SUPERBLOCK_LEN + DIRENT_LEN; // 48
+        let mut img = Vec::with_capacity(total);
+        img.extend_from_slice(&MAGIC);
+        img.extend_from_slice(&VERSION.to_le_bytes());
+        img.extend_from_slice(&1u16.to_le_bytes()); // root: one entry
+        img.extend_from_slice(&(total as u32).to_le_bytes());
+        img.extend_from_slice(&(child_off as u32).to_le_bytes()); // data_end = 48: the child table lies past it
+        write_entry(&mut img, "d", child_off as u32, DIRENT_LEN as u32, KIND_DIR);
+        img.resize(total, 0); // the child-table region — in-image, but past data_end
+        img
+    };
+    assert_eq!(
+        Fs::mount(&dir_escape).err(),
+        Some(FsError::ExtentEscapesData),
+        "m16: a directory table past data_end must be rejected too, not only file extents"
+    );
+
+    // (4) PERMITS: the legitimate image still mounts strict and reads byte-exact
+    //     (the happy path at the top used the strict Fs::mount) — confinement, not
+    //     a blanket denial, is what makes the containment above meaningful.
+    crate::serial_println!(
+        "[m16] PERMITS: the legit boot image mounts strict and reads byte-exact -- a check, not a wall"
+    );
+    crate::serial_println!(
+        "M16: filesystem boundary -- flag leaked by the loose reader, contained by data_end confinement"
+    );
 }
