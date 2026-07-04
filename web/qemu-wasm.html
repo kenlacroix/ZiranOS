@@ -27,18 +27,24 @@
   <div id="terminal"></div>
   <div id="status">loading…</div>
 
-  <!-- file_packager's loader: populates the global Module with the packaged FS
-       (QEMU's pc-bios + our ziran.iso, both under pack/). Must run before out.js. -->
-  <script src="./load.js"></script>
   <script type="module">
     // Vendored locally (see build-qemu-wasm.sh) so they load under COEP.
     import './vendor/xterm.js';       // provides window.Terminal
     import './vendor/xterm-pty.js';   // provides window.openpty
-    import initEmscriptenModule from './out.js';  // MODULARIZE default export
+
+    // The big emulator payloads (out.js/.wasm/.worker.js/.data + load.js) exceed
+    // Cloudflare Pages' 25 MiB/file cap, so they may be hosted elsewhere (e.g. an
+    // R2 bucket mapped to /qemu/). Override the base with ?assets=https://host/path/
+    // (or edit ASSET_BASE); default is the same directory (local dev via `make serve`).
+    // Cross-origin bases must send CORP/CORS headers to satisfy COEP — see DEPLOY.md.
+    const ASSET_BASE = './';
+    const qp = new URLSearchParams(location.search).get('assets');
+    const BASE = (qp || ASSET_BASE).replace(/\/?$/, '/');   // guarantee a trailing slash
 
     const status = (t) => { document.getElementById('status').textContent = t; };
 
-    // load.js populated the global `Module` with the preloaded filesystem; augment it.
+    // Configure the Emscripten Module BEFORE load.js (file_packager) runs — it
+    // registers the packaged FS (pack/ = pc-bios + ziran.iso) into Module.preRun.
     window.Module = window.Module || {};
     Module['arguments'] = [
       '-nographic',                 // no display; routes the first serial (COM1) to the pty
@@ -48,6 +54,8 @@
       '-accel', 'tcg,tb-size=500',  // software emulation — the browser has no KVM
       '-no-reboot',
     ];
+    Module['locateFile'] = (path) => BASE + path;   // out.wasm/.worker.js/.data from BASE
+    Module['mainScriptUrlOrBlob'] = BASE + 'out.js';
 
     const term = new Terminal({ cols: 100, rows: 32, convertEol: true });
     term.open(document.getElementById('terminal'));
@@ -58,12 +66,21 @@
     const { master, slave } = openpty();
     term.loadAddon(master);
     Module['pty'] = slave;
-    Module['mainScriptUrlOrBlob'] = new URL('out.js', location.href).href;
     Module['setStatus'] = (t) => { if (t) status(t); };
     Module['onExit'] = () => status('guest halted.');
 
-    status('starting QEMU (WebAssembly)…');
+    function loadScript(src) {
+      return new Promise((res, rej) => {
+        const s = document.createElement('script');
+        s.src = src; s.onload = res; s.onerror = () => rej(new Error('failed to load ' + src));
+        document.head.appendChild(s);
+      });
+    }
+
+    status('loading emulator from ' + BASE + ' …');
     (async () => {
+      await loadScript(BASE + 'load.js');                        // classic script; sets Module.preRun
+      const initEmscriptenModule = (await import(BASE + 'out.js')).default;  // MODULARIZE default export
       await initEmscriptenModule(Module);
       // Poll shim from the qemu-wasm sample — keeps keystrokes responsive.
       if (Module['TTY'] && Module['TTY'].stream_ops) {

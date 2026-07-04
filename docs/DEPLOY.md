@@ -52,19 +52,34 @@ So host the big assets on **Cloudflare R2** (object storage, no per-file cap) an
 serve them on the same domain via a route/custom domain, with
 `Cross-Origin-Resource-Policy: same-origin` (or `cross-origin`) on the bucket. Then
 point `web/qemu-wasm.html`'s asset URLs (`out.js`, `out.wasm`, `out.data`,
-`load.js`) at that path. Steps to finalize once we know the built sizes:
+`load.js`) at that path. `qemu-wasm.html` is already parameterized for this: it
+reads an **`ASSET_BASE`** (default `./` for local `make serve`), overridable per
+visit with `?assets=https://host/path/`. Steps:
 
-1. `./web/build-qemu-wasm.sh` → assets in `web/`.
-2. Create an R2 bucket, upload `out.{js,wasm,worker.js,data}` + `load.js`, set the
-   CORP header, and map it to `https://YOURDOMAIN/qemu/` (or a subdomain).
-3. In `qemu-wasm.html`, set the asset base to that path; keep `vendor/` (small)
-   and `qemu-wasm.html` in the Pages deploy.
-4. Flip `QEMU_WASM_READY = true` in `index.html` so the button appears.
-5. Confirm `crossOriginIsolated === true` in the page console, then boot.
+1. `./web/build-qemu-wasm.sh` → `out.{js,wasm,worker.js,data}` + `load.js` in `web/`.
+2. **Upload to R2:** create a bucket, then
+   ```sh
+   R2_BUCKET=ziran-os-assets ./web/deploy-r2.sh     # wrangler, or set RCLONE_REMOTE=r2:
+   ```
+   It sets the right content types (`out.wasm` → `application/wasm`).
+3. **Map the bucket to your domain, same-origin** — this is the important bit.
+   Attach a **custom domain / route** so the bucket serves at
+   `https://YOURDOMAIN/qemu/` (a Pages/Workers route or R2 custom domain on the
+   same apex). Same-origin means the COEP page can load the assets **without**
+   CORP/CORS fuss. (If you must serve them cross-origin, add
+   `Cross-Origin-Resource-Policy: cross-origin` **and** CORS `Access-Control-Allow-Origin`
+   on the bucket, or COEP will block them.)
+4. **Point the page at them:** set `ASSET_BASE = '/qemu/'` in `web/qemu-wasm.html`
+   (same-origin path) — or leave it `./` and link the button with
+   `qemu-wasm.html?assets=/qemu/`. Keep `vendor/`, `qemu-wasm.html`, `index.html`,
+   `replay.html`, `ziran-session.cast` in the Pages deploy.
+5. Flip **`QEMU_WASM_READY = true`** in `index.html` so the tour's button appears.
+6. Load it, confirm `crossOriginIsolated === true` in the console, and boot to
+   `ziran:/>`.
 
-(Smaller alternative: if the built `out.wasm` comes in under 25 MiB, you can skip
-R2 and `npx wrangler pages deploy web` the whole folder as a Direct Upload —
-needs Node. We'll know the size when the build finishes.)
+(Smaller-scale alternative: if the built `out.wasm` comes in **under 25 MiB**, skip
+R2 entirely — `npx wrangler pages deploy web` uploads the whole folder as a Direct
+Upload, assets included. Needs Node. We'll know the size when the build lands.)
 
 ## Notes
 
