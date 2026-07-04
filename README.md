@@ -99,12 +99,15 @@ levels of realness, each labelled honestly:
 - **[a real recorded session](web/replay.html)** — the actual kernel captured
   byte-for-byte over the serial line (`make console`), replayed with real timing;
 - **a genuine live boot** — real QEMU compiled to WebAssembly
-  (`web/build-qemu-wasm.sh`) booting the unmodified 64-bit ISO in the tab. This is
-  **built but not yet deployed** (verified-in-browser still pending), so its "Boot
-  the real kernel" button stays hidden for now.
+  (`web/build-qemu-wasm.sh`) booting the actual 64-bit kernel (via `-kernel`) in the
+  tab. This **works** — verified booting to an interactive `ziran:/>` shell in a
+  browser (and it flushed out two latent boot bugs along the way). The "Boot the
+  real kernel" button is live; the ~17 MB of assets just aren't publicly **hosted**
+  yet — run it now with `make serve` (or self-host).
 
-Hosting for all of the above is written up in [`docs/DEPLOY.md`](docs/DEPLOY.md)
-(Cloudflare Pages, with the big qemu-wasm assets on R2).
+Hosting is written up in [`docs/DEPLOY.md`](docs/DEPLOY.md) (Cloudflare Pages; with
+the `.data` now trimmed to ~0.5 MB the whole thing fits under Pages' 25 MB/file cap,
+so R2 is optional).
 
 | Range | State |
 |------|-------|

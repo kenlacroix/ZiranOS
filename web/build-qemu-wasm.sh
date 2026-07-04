@@ -79,14 +79,21 @@ docker run --rm --init -d --name build-qemu \
 
 # 5. Configure + compile QEMU to WASM (the other long step), then package QEMU's
 #    pc-bios AND our ISO into the Emscripten virtual FS.
-echo "==> compiling qemu-system-x86_64 to WASM + packaging pc-bios + ziran.iso"
+echo "==> compiling qemu-system-x86_64 to WASM + packaging the minimal pc-bios"
 docker exec build-qemu /bin/bash -euxc '
   cd /build
   emconfigure /qemu/configure --static --disable-tools --target-list=x86_64-softmmu
   emmake make -j"$(nproc)"
   mkdir -p pack
-  cp -r /qemu/pc-bios/* pack/
-  cp /images/ziran.iso pack/ziran.iso
+  # Package ONLY the x86 firmware the -kernel/multiboot path actually needs
+  # (SeaBIOS + the multiboot option ROM + VGA BIOS). We boot the kernel directly
+  # via -kernel (kernel-v86.bin, fetched by the page), so we do NOT package the
+  # ISO, and we drop the ~28 MB of edk2/UEFI images + non-x86 firmware. Verified
+  # sufficient with native `-kernel -L <this set>`. Shrinks out.data ~44MB -> <1MB.
+  for f in bios-256k.bin bios.bin multiboot.bin multiboot_dma.bin \
+           vgabios-stdvga.bin vgabios.bin kvmvapic.bin linuxboot.bin linuxboot_dma.bin; do
+    [ -f "/qemu/pc-bios/$f" ] && cp "/qemu/pc-bios/$f" pack/ || true
+  done
   /emsdk/upstream/emscripten/tools/file_packager.py qemu-system-x86_64.data --preload pack > load.js
 '
 
