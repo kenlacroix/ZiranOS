@@ -84,7 +84,7 @@ ifeq ($(PROFILE),debug)
     CARGO_FLAGS :=
 endif
 
-.PHONY: all iso run run-headless debug gdb clean check-header web
+.PHONY: all iso run console run-headless debug gdb clean check-header web
 
 all: $(KERNEL)
 
@@ -135,6 +135,14 @@ $(UEFI_VARS):
 # --- Running -----------------------------------------------------------------
 run: $(ISO) $(QEMU_FW_DEPS)
 	$(QEMU) $(QEMU_FW_FLAGS) -cdrom $(ISO) -m 128M -serial stdio -no-reboot
+
+# Interactive serial console: COM1 is wired to *this terminal*, so you drive the
+# shell (help / ps / mem / pwd / cd / ls / cat) right here — no VGA window needed.
+# This is the way to use it where the legacy VGA text console isn't displayed
+# (e.g. macOS UEFI/OVMF). `-serial mon:stdio` multiplexes the QEMU monitor too:
+# press Ctrl-A then X to quit, or Ctrl-A then C for the monitor.
+console: $(ISO) $(QEMU_FW_DEPS)
+	$(QEMU) $(QEMU_FW_FLAGS) -cdrom $(ISO) -m 128M -serial mon:stdio -display none -no-reboot
 
 # Headless boot smoke test. Boot for a few seconds with serial captured to a log,
 # then assert the kernel got far enough to print its long-mode marker. We do not

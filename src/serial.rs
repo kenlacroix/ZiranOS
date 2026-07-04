@@ -47,6 +47,23 @@ impl SerialPort {
         unsafe { inb(self.base + 5) & 0x20 != 0 }
     }
 
+    /// Read one received byte if the UART has one waiting, else `None`. Bit 0 of
+    /// the line-status register is Data Ready; the receive buffer is at `base + 0`.
+    /// Non-blocking — polled by the shell (we left UART interrupts disabled).
+    fn recv(&mut self) -> Option<u8> {
+        if !self.initialised {
+            self.init();
+        }
+        // SAFETY: reading the fixed 16550 line-status and receive-buffer ports.
+        unsafe {
+            if inb(self.base + 5) & 0x01 == 0 {
+                None
+            } else {
+                Some(inb(self.base))
+            }
+        }
+    }
+
     fn send(&mut self, byte: u8) {
         if !self.initialised {
             self.init();
@@ -81,6 +98,14 @@ static SERIAL1: Mutex<SerialPort> = Mutex::new(SerialPort::new(COM1));
 #[doc(hidden)]
 pub fn _print(args: fmt::Arguments) {
     let _ = SERIAL1.lock().write_fmt(args);
+}
+
+/// Read one byte from COM1 if one is waiting, else `None`. Non-blocking — this is
+/// how the shell drives an interactive session over the serial line, which is the
+/// only console when the VGA text buffer isn't displayed (e.g. under UEFI/OVMF).
+/// The UART is a single device and the shell task is its only consumer.
+pub fn read_byte() -> Option<u8> {
+    SERIAL1.lock().recv()
 }
 
 /// Print to COM1 (no trailing newline).

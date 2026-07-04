@@ -19,9 +19,28 @@
 //! `docs/concepts/input-and-shell.md`.
 
 use crate::keyboard;
-use crate::{interrupts, print, println, serial_println};
+use crate::{interrupts, serial_println};
 use alloc::string::String;
 use alloc::vec::Vec;
+
+/// Print to **both** the VGA console and the serial line. All shell output goes
+/// through these, so the shell is usable whether you watch the QEMU window (legacy
+/// BIOS) or drive it over a serial terminal — the only console available under
+/// UEFI/OVMF, where the legacy VGA text buffer isn't displayed. `serial::read_byte`
+/// is the matching input path (see `shell_main`).
+macro_rules! shp {
+    ($($a:tt)*) => {{
+        crate::print!($($a)*);
+        crate::serial_print!($($a)*);
+    }};
+}
+macro_rules! shln {
+    () => {{ crate::println!(); crate::serial_println!(); }};
+    ($($a:tt)*) => {{
+        crate::println!($($a)*);
+        crate::serial_println!($($a)*);
+    }};
+}
 
 /// Maximum length of one input line. Fixed and heapless: a longer line simply
 /// stops accepting printable characters (no wrap, no reallocation).
@@ -146,18 +165,18 @@ fn dispatch(cwd: &mut String, line: &str) {
     match parse(line) {
         Command::Empty => {}
         Command::Help => {
-            println!("commands:");
-            println!("  help          show this list");
-            println!("  echo <text>   print <text>");
-            println!("  clear         clear the screen");
-            println!("  mem           show memory usage");
-            println!("  ps            list tasks");
-            println!("  pwd           print the working directory");
-            println!("  cd [path]     change directory (no arg -> /)");
-            println!("  ls [path]     list a directory (default: cwd)");
-            println!("  cat <path>    print a file");
+            shln!("commands:");
+            shln!("  help          show this list");
+            shln!("  echo <text>   print <text>");
+            shln!("  clear         clear the screen");
+            shln!("  mem           show memory usage");
+            shln!("  ps            list tasks");
+            shln!("  pwd           print the working directory");
+            shln!("  cd [path]     change directory (no arg -> /)");
+            shln!("  ls [path]     list a directory (default: cwd)");
+            shln!("  cat <path>    print a file");
         }
-        Command::Echo(rest) => println!("{rest}"),
+        Command::Echo(rest) => shln!("{rest}"),
         Command::Clear => crate::vga_buffer::clear_screen(),
         Command::Mem => cmd_mem(),
         Command::Ps => cmd_ps(),
@@ -165,7 +184,7 @@ fn dispatch(cwd: &mut String, line: &str) {
         Command::Cd(p) => cmd_cd(cwd, p),
         Command::Ls(p) => cmd_ls(cwd, p),
         Command::Cat(p) => cmd_cat(cwd, p),
-        Command::Unknown(verb) => println!("unknown command: {verb} (try help)"),
+        Command::Unknown(verb) => shln!("unknown command: {verb} (try help)"),
     }
 }
 
@@ -174,22 +193,22 @@ fn cmd_mem() {
     let free_frames = crate::frame_allocator::free_frame_count();
     let (heap_used, heap_free) = crate::heap::stats();
     let ticks = crate::pit::ticks();
-    println!("memory:");
-    println!("  frames: {free_frames} free ({} MiB)", free_frames / 256);
-    println!(
+    shln!("memory:");
+    shln!("  frames: {free_frames} free ({} MiB)", free_frames / 256);
+    shln!(
         "  heap:   {heap_used} used / {heap_free} free / {} total bytes",
         crate::heap::HEAP_SIZE
     );
-    println!("  uptime: {} s ({ticks} ticks @ 100 Hz)", ticks / 100);
+    shln!("  uptime: {} s ({ticks} ticks @ 100 Hz)", ticks / 100);
 }
 
 /// `ps` — the scheduler's task list: id, state, and which one is current.
 fn cmd_ps() {
     let tasks = crate::task::snapshot();
-    println!("tasks: {}", tasks.len());
+    shln!("tasks: {}", tasks.len());
     for (id, state, current) in tasks {
         let marker = if current { "  (current)" } else { "" };
-        println!("  [{id}] {}{marker}", state.name());
+        shln!("  [{id}] {}{marker}", state.name());
     }
 }
 
@@ -223,12 +242,12 @@ fn canonicalize(cwd: &str, arg: &str) -> String {
 
 /// Print the prompt for the current directory, e.g. `ziran:/docs> `.
 fn print_prompt(cwd: &str) {
-    print!("ziran:{cwd}> ");
+    shp!("ziran:{cwd}> ");
 }
 
 /// `pwd` — print the current working directory.
 fn cmd_pwd(cwd: &str) {
-    println!("{cwd}");
+    shln!("{cwd}");
 }
 
 /// `cd [path]` — change directory. No arg -> root. A bad `cd` leaves cwd unchanged.
@@ -243,14 +262,14 @@ fn cmd_cd(cwd: &mut String, arg: &str) {
     let fs = match crate::fs::Fs::mount(&image) {
         Ok(fs) => fs,
         Err(e) => {
-            println!("cd: cannot mount filesystem: {e:?}");
+            shln!("cd: cannot mount filesystem: {e:?}");
             return;
         }
     };
     match fs.resolve(&target) {
         Ok(crate::fs::Node::Dir { .. }) => *cwd = target,
-        Ok(crate::fs::Node::File { .. }) => println!("cd: not a directory: {target}"),
-        Err(_) => println!("cd: no such directory: {target}"),
+        Ok(crate::fs::Node::File { .. }) => shln!("cd: not a directory: {target}"),
+        Err(_) => shln!("cd: no such directory: {target}"),
     }
 }
 
@@ -263,22 +282,22 @@ fn cmd_ls(cwd: &str, arg: &str) {
     let fs = match crate::fs::Fs::mount(&image) {
         Ok(fs) => fs,
         Err(e) => {
-            println!("ls: cannot mount filesystem: {e:?}");
+            shln!("ls: cannot mount filesystem: {e:?}");
             return;
         }
     };
     match fs.list_dir(&target) {
-        Ok(entries) if entries.is_empty() => println!("(empty)"),
+        Ok(entries) if entries.is_empty() => shln!("(empty)"),
         Ok(entries) => {
             for e in entries {
                 if e.is_dir {
-                    println!("  {:20} <dir>", e.name);
+                    shln!("  {:20} <dir>", e.name);
                 } else {
-                    println!("  {:20} {} bytes", e.name, e.length);
+                    shln!("  {:20} {} bytes", e.name, e.length);
                 }
             }
         }
-        Err(_) => println!("ls: no such directory: {target}"),
+        Err(_) => shln!("ls: no such directory: {target}"),
     }
 }
 
@@ -286,7 +305,7 @@ fn cmd_ls(cwd: &str, arg: &str) {
 /// are shown lossily rather than panicking (on-disk data is arbitrary bytes).
 fn cmd_cat(cwd: &str, arg: &str) {
     if arg.is_empty() {
-        println!("usage: cat <path>");
+        shln!("usage: cat <path>");
         return;
     }
     let target = canonicalize(cwd, arg);
@@ -294,14 +313,14 @@ fn cmd_cat(cwd: &str, arg: &str) {
     let fs = match crate::fs::Fs::mount(&image) {
         Ok(fs) => fs,
         Err(e) => {
-            println!("cat: cannot mount filesystem: {e:?}");
+            shln!("cat: cannot mount filesystem: {e:?}");
             return;
         }
     };
     match fs.read_path(&target) {
-        Ok(bytes) => print!("{}", String::from_utf8_lossy(bytes)),
-        Err(crate::fs::FsError::IsADirectory) => println!("cat: is a directory: {target}"),
-        Err(_) => println!("no such file: {target}"),
+        Ok(bytes) => shp!("{}", String::from_utf8_lossy(bytes)),
+        Err(crate::fs::FsError::IsADirectory) => shln!("cat: is a directory: {target}"),
+        Err(_) => shln!("no such file: {target}"),
     }
 }
 
@@ -314,28 +333,45 @@ pub extern "C" fn shell_main() {
     interrupts::enable();
 
     serial_println!("M12: file manager online");
-    println!();
-    println!("Ziran OS shell -- type `help` for commands.");
+    shln!();
+    shln!("Ziran OS shell -- type `help` for commands.");
 
     let mut cwd = String::from("/");
     print_prompt(&cwd);
 
     let mut line = Line::new();
     loop {
-        match keyboard::pop() {
-            Some(byte) => match line.edit(byte) {
-                Edit::Echo(b) => print!("{}", b as char),
-                Edit::Erase => print!("\u{8}"), // the VGA writer moves back and blanks the cell
-                Edit::Submit => {
-                    println!();
-                    dispatch(&mut cwd, line.as_str());
-                    line.clear();
-                    print_prompt(&cwd);
+        // Take input from the PS/2 keyboard ring OR the serial line (a terminal),
+        // whichever has a byte. Serial has no IRQ here (we left UART interrupts
+        // off), so it is polled; the 100 Hz timer wakes the `hlt` below, so serial
+        // input lands within one tick — imperceptible to a typist.
+        match keyboard::pop().or_else(crate::serial::read_byte) {
+            Some(raw) => {
+                // Normalize terminal conventions to what `Line::edit` expects: a
+                // serial Enter is CR (0x0d), and terminals send DEL (0x7f) for
+                // Backspace.
+                let byte = match raw {
+                    b'\r' => b'\n',
+                    0x7f => 0x08,
+                    b => b,
+                };
+                match line.edit(byte) {
+                    Edit::Echo(b) => shp!("{}", b as char),
+                    // Erase visibly on a serial terminal too: back, space, back.
+                    // On VGA this nets the same (the writer blanks on each \u{8}).
+                    Edit::Erase => shp!("\u{8} \u{8}"),
+                    Edit::Submit => {
+                        shln!();
+                        dispatch(&mut cwd, line.as_str());
+                        line.clear();
+                        print_prompt(&cwd);
+                    }
+                    Edit::Ignored => {}
                 }
-                Edit::Ignored => {}
-            },
-            // Ring empty: sleep until the next interrupt re-runs this loop. Safe
-            // because the shell holds no lock here and runs with interrupts on.
+            }
+            // Nothing to read: sleep until the next interrupt (timer tick or a
+            // keystroke IRQ) re-runs this loop. Safe — the shell holds no lock here
+            // and runs with interrupts on.
             // SAFETY: `hlt` only pauses this CPU until the next interrupt.
             None => unsafe {
                 core::arch::asm!("hlt", options(nomem, nostack, preserves_flags));
