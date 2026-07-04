@@ -849,16 +849,72 @@ secret. The self-test asserts this directly: `read_path("/FLAG")` and any other
 guess return `NotFound`. **The boundary holds: what has no name cannot be
 navigated to.**
 
-But be precise about *which* boundary holds, because the gap is deliberate and it is
-the point. `mount` checks that every file extent is *in-bounds*, but it does **not**
-confine a file's extent to the data region — a `FILE` entry may legally point its
+But be precise about *which* boundary holds. Through Milestone 12, `mount` checked
+that every file extent was *in-bounds* — `offset + length <= total_size` — but did
+**not** confine it to the data region. A `FILE` entry could legally point its
 `offset`/`length` at the superblock, at another file's bytes, or at the secret. So
-while *navigation* can never reach the flag, a **crafted image** with a file entry
-whose extent overlaps the secret's bytes would read it right out. That is not an
-oversight; it is the planted **M16 exfil target** (PLAN §8): the secret is safe
-against navigation, and deliberately *not* safe against an arbitrary crafted image.
-M16's job is to be the adversary that builds that image; M12's job is to plant a
-real boundary worth attacking and to be honest about exactly how far it extends.
+while *navigation* could never reach the flag, a **crafted image** with a file entry
+whose extent overlapped the secret read it right out. That was not an oversight; it
+was the planted **M16 exfil target** (PLAN §8) — the secret was safe against
+navigation, and deliberately *not* safe against an arbitrary crafted image.
+
+**Milestone 16 is the adversary that builds that image — and then closes the gap.**
+See "Milestone 16: the aliased extent" below: the fix is a **data-region ceiling**
+(`data_end`, a v3 superblock field) that confines every entry's extent, so the same
+crafted image now `mount`s to `ExtentEscapesData` instead of leaking. The lesson it
+draws: *a bounds check is only as trustworthy as the bound it compares against* —
+M11 bounded by `total_size` (the whole image); the fix bounds by `data_end` (where
+the data ends).
+
+## Milestone 16: the aliased extent (the confused deputy, one layer down)
+
+The attack is one crafted directory entry. Take the boot image and repoint a
+`FILE` entry so its `offset`/`length` cover the secret's byte range — for the
+planted `FLAG{ziran-boundary-leak}`, `offset = data_end`, `length = 25`. Nothing
+about the entry is malformed by M11's rules: the extent is in-bounds
+(`offset + length == total_size`), the name is valid, the kind is a file. So
+`mount` (through M12) accepts it, and `cat`-ing that entry returns the flag,
+because `read_path` hands back exactly `&image[offset .. offset+length]`. The
+filesystem was tricked into reading bytes on the caller's behalf that the caller
+was never meant to reach — a **confused deputy** made of offsets instead of
+pointers, the direct analogue of Milestone 15's syscall.
+
+The fix names where the data actually ends. Format **v3** gives meaning to the
+superblock's last reserved word: **`data_end`**, the offset where addressable file
+data stops. The secret lives in `[data_end, total)`, past it. The strict reader
+(`Fs::mount`) confines **every** entry's extent — file data *and* directory tables
+— to end at or before `data_end`; an extent that reaches into the reserved region
+is `ExtentEscapesData`. The M11 check compared against `total_size` (the whole
+image); the fix compares against `data_end` (the legitimate data). Same crafted
+image, different bound, opposite outcome.
+
+The milestone ships both readers on purpose. `Fs::mount` is strict; `Fs::mount_loose`
+keeps the old `total_size` bound, so the self-test drives the *same* crafted image
+through both and you watch the flag leak through one and be contained by the other
+— the "decision you can feel." (Like the ring-3 milestone's deliberately-unchecked
+syscall, the loose reader is a teaching device, never a reader a real system trusts.)
+
+Two honest residuals, both stated rather than hidden — because the point of the
+security track is to know exactly how far a boundary extends:
+
+- **A forged superblock.** `data_end` is itself a field *in the image*. An attacker
+  who can rewrite the whole superblock (not just an entry) can set
+  `data_end = total_size` and reopen the leak. `mount` range-checks `data_end`
+  (`BadDataEnd` for out-of-range) but cannot make an in-image field trustworthy
+  against a fully-forged header. This is Milestone 15's deepest lesson recurring:
+  *validating against a value the caller controls is not validation.* Fully closing
+  it needs structural coverage accounting or an out-of-band authority — out of scope
+  for a teaching FS.
+- **Floor-aliasing.** The fix is a ceiling, not a full "each byte owned by one
+  file" accounting. A file extent *below* `data_end` may still overlap another
+  file's bytes or the metadata — it can disclose structure, but never the secret
+  (which lives above `data_end`). Named as a fuzzing target, not built.
+
+The self-test was itself the acceptance test the fix was written against, and a
+red-team pass hardened it: two independent reviewers both caught that the first fix
+confined *file* extents but not *directory* tables — un-exploitable for this 25-byte
+secret only by the accident that 25 isn't a multiple of the 32-byte entry size, so
+the ceiling now applies to every entry uniformly.
 
 # Where this goes next
 
@@ -874,13 +930,16 @@ user somewhere to *go*.
   malformed lie about bytes," the syscall boundary teaches "refuse to act on a
   malformed request from a less-privileged caller" — the same trust-boundary
   discipline, one ring up.
-- **The M15/M16 security track** turns this milestone's boundaries into targets.
-  M16 (fuzzing) turns the ten hand-written corrupt images into a generated flood
-  against the strengthened `mount` contract — *never panic, never hang, never
-  smash the stack; only `Ok` or a specific `Err`* — and its headline goal is to
-  **capture the planted flag**: craft the file entry whose extent overlaps
-  `FLAG{ziran-boundary-leak}` that `mount` currently permits. The unconfined file
-  extent is the gap by design; M16 is the exploit that proves it matters.
+- **The M15/M16 security track** turned this milestone's boundaries into targets,
+  and both are now done. M15 captured a flag behind the ring-3 boundary through an
+  unchecked syscall; **M16 captured `FLAG{ziran-boundary-leak}` through a crafted
+  file extent and then closed the gap** with the `data_end` confinement (see
+  "Milestone 16: the aliased extent" above). What remains here is the *generated*
+  fuzzing flood — turning the dozen hand-written corrupt images into a machine-made
+  stream against the strengthened `mount` contract (*never panic, never hang, never
+  smash the stack; only `Ok` or a specific `Err`*) — plus the two named residuals
+  (forged-superblock `data_end`, floor-aliasing) as sharper targets. A good future
+  post, no longer a prerequisite for the capture.
 - **A future FAT16 read post** still cashes in the v1 contrast: parse a format you
   didn't design, from a real `mkfs.fat` image, and meet the cluster chain and the
   BPB in the wild.

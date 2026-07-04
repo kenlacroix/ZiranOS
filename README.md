@@ -127,7 +127,8 @@ so R2 is optional).
 | M12 **file manager** (end goal) — `cd`/`pwd`/`ls`/`cat`, subdirectories | ✅ **done** |
 | M13 userspace / ring 3 / syscalls — the first privilege boundary | ✅ **done** |
 | M15 break the privilege boundary (security) — flag capture, confused-deputy syscall | ✅ **done** |
-| M14 networking stub · M16 break the filesystem boundary (security) | ⬜ stretch |
+| M16 break the filesystem boundary (security) — flag capture, aliased-extent exfil | ✅ **done** |
+| M14 networking stub (the last stretch) | ⬜ stretch |
 
 ## What happens when it boots
 
@@ -141,7 +142,10 @@ GRUB (Multiboot2)
                              (M13); plant a FLAG on a kernel-only page and let ring 3
                              attack it — a direct read faults, a syscall without
                              copy-from-user leaks it, the validated syscall contains
-                             it (M15); then spawn a shell task and idle — a `ziran:/>`
+                             it (M15); craft a filesystem image whose file extent
+                             aliases a hidden on-disk FLAG — the loose reader leaks
+                             it, the strict reader's data_end confinement holds
+                             (M16); then spawn a shell task and idle — a `ziran:/>`
                              prompt you navigate (`help`, `ps`, `mem`, `cd`, `pwd`,
                              `ls`, `cat`)
 ```

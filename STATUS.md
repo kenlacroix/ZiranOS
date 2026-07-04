@@ -23,7 +23,7 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started
 | 13 | Userspace / ring 3 / syscalls (stretch) | ✅ | **The project's first CPU privilege boundary — the security track is now open.** `src/gdt.rs` rebuilds the GDT in Rust with ring-3 code/data descriptors + a TSS whose RSP0 catches the ring 3 → 0 transition (`tr=0x28`); `src/paging.rs` adds a `USER` flag + `map_user_page` that sets U/S on the leaf **and every table on the walk** (the CPU ANDs it down the whole chain; kernel leaves stay U/S=0); `src/interrupts.rs` adds a DPL-3 `int 0x80` gate + `syscall` dispatch. **The excursion** (`src/usermode.rs` + `boot/usermode.asm`): a position-independent blob entered by a fabricated `iretq` (CS 0x1b/SS 0x23) prints `'Z'` via `int 0x80` **from CPL 3**, then returns to ring 0 by rewriting the ISR's saved frame. **Enforcement test:** `cli` → #GP and `mov rax,[0xb8000]` → #PF, both caught at CPL 3 (verified by serial + QEMU `-d int`: `v=80`/`v=0d`/`v=0e cpl=3`). `/kernel-review` (no critical/high; 4 low fixes) + `/red-team` (9/9 ring-3 escapes blocked; `sgdt`/`sidt` info-leak found, UMIP would close it) done. Concept doc `docs/concepts/privilege.md`, blog post `docs/blog/13-the-first-wall.md`, web tour step. See `docs/planning/milestone-13-{eng-plan,red-team,retro}.md`. Marker `M13: userspace online`. |
 | 14 | Networking stub (stretch) | ⬜ | |
 | 15 | Break the privilege boundary (security) | ✅ | **Flag captured, then contained — the confused-deputy lesson.** A `FLAG{…}` is planted on a **kernel-only (U/S=0)** page at 1.5 GiB (`src/usermode.rs`, `map_page` → supervisor leaf). Two ring-3 attacks: a **direct** read of the secret VA → **#PF** (the M13 hardware boundary, held); and the kernel's first **pointer-carrying syscall** as the *confused deputy*. `src/interrupts.rs` adds `SYS_WRITE(ptr,len)` (validated) and `SYS_WRITE_UNCHECKED` (the deliberately-broken twin). The validator `paging::user_range_ok` walks the page tables requiring `PRESENT|USER` at **every** level (ANDing U/S like the MMU), rejecting overflow/non-canonical/kernel ranges **without dereferencing**. Result (all four asserted, CI-pinned): unchecked deputy **leaks** the flag with ring-0 power; validated deputy **rejects** the same kernel pointer (-1, nothing read); validated deputy still **permits** a legit user buffer. **The lesson:** the CPU stops *unauthorized access*, but only software (`copy_from_user`) stops *authorized misuse*. `/kernel-review` clean (no critical/high; 3 low fixes) + `/red-team` (validated path holds vs. aliasing/TOCTOU/arithmetic; the identity-map alias of the secret is stopped by the un-loosened `PDPT[0]` — `map_user_page`'s `virt≥IDENTITY_LIMIT` assert is load-bearing security). Red-team found + fixed **one real DoS**: `user_range_ok` accepted a non-canonical pointer that then #GP'd the kernel in ring 0 — closed by rejecting `end > 2^47`, and pinned as a CI invariant. `sgdt`/`sidt` info-leak still open (UMIP off, a deliberate non-goal). Concept doc `docs/concepts/privilege.md`, blog `docs/blog/15-the-confused-deputy.md`, web tour step. See `docs/planning/milestone-15-eng-plan.md`. Marker `M15: privilege boundary`. |
-| 16 | Break the filesystem boundary (security) | ⬜ | Needs M11–12. Objective: **exfiltrate a hidden secret** (bytes on the RAM disk with no directory entry) by aliasing them past a file's extent — targets M11's deliberately-loose extent check. Groundwork (the hidden bytes) is planted in M12's `mkfs`. See PLAN §8. |
+| 16 | Break the filesystem boundary (security) | ✅ | **Flag captured, then contained — the confused deputy one layer down (offsets, not pointers).** The hidden `FLAG{ziran-boundary-leak}` (25 B, no directory entry) sits at the image tail. M11's `mount` bounded a file extent only by `total_size` (the whole image) and `read_path` returns `&image[offset..offset+length]` — so a crafted **file entry** whose extent aliases the secret's bytes leaks it. **The fix (a decision you can feel):** format **v2→v3** repurposes the superblock's reserved `u32` at 0x0C as **`data_end`** (where addressable data stops; the secret lives in `[data_end, total)`); strict `Fs::mount` confines **every** entry's extent — file *and* directory table — to `<= data_end` (new `ExtentEscapesData`), while a deliberately-loose `Fs::mount_loose` (the M11-era bound) is kept as the teaching twin. Four asserted, CI-pinned outcomes: navigation **holds** (`/FLAG` → `NotFound`); the loose reader **leaks** the flag (asserted **byte-equal**); strict **rejects** the same crafted image (`ExtentEscapesData`); strict still **permits** legit files byte-exact. `/kernel-review` clean (no critical/high; totality preserved, off-by-one correct, v3 check-ordering keeps all 10 legacy corrupt-image tests tripping their intended error) + `/red-team` (strict `mount` total — no panic/hang — and holds vs. every entry-level attack). **Both reviewers independently found** the same real gap: the ceiling guarded file extents but not `KIND_DIR` tables — closed by confining every entry uniformly, pinned with a synthetic `dir_escape` test. Two residuals kept honestly: a **forged superblock** `data_end` (an in-image field — M15's attacker-controlled-metadata lesson) and **floor-aliasing** (leaks metadata, never the flag). The lesson: **a bounds check is only as trustworthy as the bound it compares against.** Concept doc `docs/concepts/filesystem.md`, blog `docs/blog/16-attacking-the-lies-about-disk-layout.md`, web tour step. See `docs/planning/milestone-16-eng-plan.md`. Marker `M16: filesystem boundary`. |
 | — | Serial console (`make console`) | ✅ | The shell is drivable over COM1. `src/serial.rs` gained a non-blocking `recv`/`read_byte`; the shell task polls it, so keystrokes in and output out flow over the serial line — the only interactive console when the VGA text buffer isn't displayed (UEFI/OVMF). Wire it to your terminal with `make console` (or `./run`); it's also what the recorded web session was captured from. |
 | — | Teaching tool (`web/`) | 🚧 | Guided predict→observe→explain **tour** over M0–M13 + M15, with an **ELI5** toggle (plain-language lens) and the "why this exists / not AI slop" **manifesto** up front. The tour is a *faithful reconstruction* — exact kernel output, replayed — because a 64-bit kernel can't run in v86/the lightweight browser emulators. Plus **[a real recorded session](web/replay.html)** (`web/ziran-session.cast`) captured over serial. A **genuine live boot** — real QEMU compiled to WebAssembly (`web/build-qemu-wasm.sh`, `web/qemu-wasm.html`) booting the actual 64-bit kernel via `-kernel` in the tab — **works: verified booting to an interactive `ziran:/>` shell in a browser** — by hand, and by an automated **headless-Chrome** end-to-end test (`web/browser-test.py` / `make web-test`, which boots the page and drives `ps`). Bring-up surfaced + fixed two latent boot bugs — an unloaded GOT on the flat/`-kernel` path, and SSE not explicitly enabled — and one time-dilation quirk (the preemption self-test warns instead of panicking under qemu-wasm's browser timing). Its "Boot the real kernel" button is enabled (`QEMU_WASM_READY=true`); the assets (~17 MB total, `.data` trimmed to 0.5 MB) just aren't publicly **hosted** yet — run it via `make serve` / self-host. Hosting write-up: `docs/DEPLOY.md`. See `docs/planning/web-live-boot-qemu-wasm.md`. |
 
@@ -70,26 +70,39 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started
   user buffer** (proving the check permits, not just denies). Three direct
   validator assertions pin the red-team's findings — `user_range_ok` denies a
   kernel identity page, a non-canonical pointer, and an overflowing range.
+- **Filesystem boundary (M16):** the boot self-test plants no new bytes (M12's
+  `FLAG` is the target) and asserts four outcomes plus the boundary and residual
+  cases: navigation can't reach the secret (`/FLAG` → `NotFound`); a crafted image
+  whose file entry aliases the secret **leaks** it through `Fs::mount_loose`, the
+  capture asserted **byte-equal** to `FLAG{ziran-boundary-leak}`; the strict
+  `Fs::mount` **rejects** the same image with `ExtentEscapesData`; and the
+  legitimate image still mounts strict and reads byte-exact. Pinned invariants: an
+  extent ending exactly at `data_end` passes and one byte past is rejected
+  (off-by-one), a malformed `data_end` → `BadDataEnd`, and a `KIND_DIR` table past
+  `data_end` is rejected too (the red-team's scope-asymmetry finding). All 10
+  legacy corrupt-image rejections still trip their specific `FsError` under v3.
 
 ## Next up (the security track + stretch)
 
-The core goal (M12) is met, the first privilege boundary (M13) is built, and the
-first security milestone (M15) is done — the privilege boundary has been attacked
-in earnest and the confused-deputy syscall closed. From here the roadmap is the
-remaining security milestone and the stretch goals — in any order:
+The core goal (M12) is met, the first privilege boundary (M13) is built, and
+**both security milestones (M15 privilege, M16 filesystem) are done** — each
+boundary has been attacked in earnest, its flag captured, and the gap closed.
+What's left is the two stretch odds and ends, in any order:
 
-1. **M16 — break the filesystem boundary** is already seeded: the hidden `FLAG{…}`
-   is planted on the M12 disk, unreachable by `ls`/`cat` — the exfil target is a
-   crafted image that aliases its bytes past a file's extent. This is the direct
-   analogue of M15's confused deputy, one layer down: M15 showed that a syscall
-   validating *permission but not addressability* is only half a check; M16 targets
-   the FS's extent check, which validates *in the image* but not *within a file's
-   own region*.
-2. **M14 — networking stub** (loopback / trivial virtio-net), a separate stretch.
-3. **Close the M13/M15 `sgdt`/`sidt` leak (optional).** A one-line `CR4.UMIP`
+1. **M14 — networking stub** (loopback / trivial virtio-net, "hello" over a
+   socket) — the last remaining roadmap item, and a separate stretch. Note the
+   PLAN §1 non-goal: a *stub*, not a stack.
+2. **Close the M13/M15 `sgdt`/`sidt` leak (optional).** A one-line `CR4.UMIP`
    write turns the two non-privileged store-descriptor reads into #GP from ring 3.
    Left open on purpose — it is *hardening*, a PLAN §1 non-goal — but a good
    "watch the mitigation land" demonstration if a future post wants it.
+
+With M16 done, the two security-track lessons rhyme: a bounds check is only as
+good as the bound it trusts. M15's syscall validated *permission but not
+addressability*; M16's `mount` validated *in the image but not within the data
+region*. Both had a residual where the check trusts attacker-influenced input
+(M15's non-canonical pointer — fixed; M16's forged-superblock `data_end` — named,
+the honest edge of a toy FS).
 
 Deferred (fold in when robustness matters):
 - A **TSS + IST stack for the double-fault handler**, so even a stack overflow
