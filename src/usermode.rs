@@ -29,6 +29,9 @@
 //! copy-from-user, is the M15 "confused deputy" surface), no ELF, no loader, no
 //! scheduler integration. See `docs/planning/milestone-13-eng-plan.md`.
 
+use core::sync::atomic::{AtomicU64, Ordering};
+
+use crate::frame_allocator::PhysFrame;
 use crate::interrupts::InterruptContext;
 use crate::{frame_allocator, gdt, interrupts, paging, serial_println};
 
@@ -99,21 +102,8 @@ pub fn resume_kernel(ctx: &mut InterruptContext) {
 /// gate is [`resume_kernel`]'s CPL-3 assertion. Reaching the end at all proves
 /// the ring 0 → 3 → 0 round-trip left the kernel's GDT/IDT/CR3/stack intact.
 pub fn self_test() {
-    // Map the blob's code user-accessible and executable (PRESENT|USER, not
-    // writable, NX unset). Copy the bytes in through the frame's identity address.
-    let code_frame = frame_allocator::alloc().expect("usermode: no frame for user code");
-    let code_phys = code_frame.start_address();
-    // SAFETY: `code_phys` is a fresh, identity-mapped frame; we write exactly the
-    // blob's length (21 bytes) into a 4 KiB page.
-    unsafe {
-        core::ptr::copy_nonoverlapping(USER_BLOB.as_ptr(), code_phys as *mut u8, USER_BLOB.len());
-    }
-    paging::map_user_page(UVA_CODE, code_phys, 0).expect("usermode: map user code");
-
-    // Map a user stack page (PRESENT|USER|WRITABLE).
-    let stack_frame = frame_allocator::alloc().expect("usermode: no frame for user stack");
-    let stack_phys = stack_frame.start_address();
-    paging::map_user_page(UVA_STACK, stack_phys, paging::WRITABLE).expect("usermode: map user stack");
+    // Map the blob user-accessible + executable and a user stack (see helper).
+    let (code_frame, stack_frame) = map_user_program(&USER_BLOB);
 
     serial_println!(
         "[m13] entering ring 3: code@{:#x}, stack@{:#x} (expect CS=0x1b, CPL=3)",
@@ -136,13 +126,107 @@ pub fn self_test() {
 
     serial_println!("[ok] returned to ring 0 from the userspace excursion — round-trip intact");
 
-    // Tidy up: unmap and free the user data frames. The intermediate tables leak,
-    // exactly like the paging self-tests (reclaiming empty tables is a later
-    // refinement) — a bounded, deliberate cost.
+    unmap_user_program(code_frame, stack_frame);
+
+    serial_println!("M13: userspace online");
+}
+
+/// The vector of the last ring-3 violation the enforcement test caught (13=#GP,
+/// 14=#PF), or 0 for none. Written by [`recover_from_violation`] from the fault
+/// handler, read by [`run_violation`] after the excursion returns.
+static LAST_VIOLATION: AtomicU64 = AtomicU64::new(0);
+
+/// Blob: `cli` (a privileged instruction) then spin. In ring 3 with IOPL 0,
+/// `cli` raises **#GP** — the CPU refuses to let unprivileged code disable
+/// interrupts.
+static BLOB_CLI: [u8; 3] = [
+    0xFA, // cli
+    0xEB, 0xFE, // jmp $ (never reached — cli faults first)
+];
+
+/// Blob: read the VGA buffer at absolute `0xb8000` (a kernel-only, U/S=0 page)
+/// then spin. From ring 3 this raises **#PF** with the error-code U/S bit set —
+/// the page permission stopping a user read of kernel memory.
+static BLOB_READ_KERNEL: [u8; 12] = [
+    0x48, 0xA1, 0x00, 0x80, 0x0B, 0x00, 0x00, 0x00, 0x00, 0x00, // mov rax, [0xb8000]
+    0xEB, 0xFE, // jmp $ (never reached — the read faults first)
+];
+
+/// Called from the ring-3 fault arm of `interrupt_dispatch`. Record which fault
+/// the CPU raised, then rewrite the frame to unwind back to ring 0 — same
+/// mechanism as [`resume_kernel`], so a caught violation returns cleanly into
+/// [`run_violation`] instead of halting the kernel.
+pub fn recover_from_violation(ctx: &mut InterruptContext, vector: u64) {
+    LAST_VIOLATION.store(vector, Ordering::SeqCst);
+    resume_kernel(ctx);
+}
+
+/// Milestone 13 — the enforcement test (the M15 privilege-boundary preview). Run
+/// two blobs that each *deliberately* violate the boundary and assert the CPU
+/// caught each one, from CPL 3: a privileged instruction (`cli` → #GP) and a read
+/// of a kernel-only page (`0xb8000` → #PF, U/S bit set). "It printed and didn't
+/// crash" was never the bar; "it tried to cheat and the hardware said no, from
+/// ring 3" is (office-hours Q4).
+pub fn enforcement_test() {
+    run_violation("cli (a privileged instruction)", &BLOB_CLI, 13);
+    run_violation("a read of kernel page 0xb8000", &BLOB_READ_KERNEL, 14);
+    serial_println!(
+        "[ok] M13: ring-3 boundary enforced — privileged instr -> #GP, kernel read -> #PF, both caught at CPL 3"
+    );
+}
+
+/// Run one violating blob in ring 3 and assert the CPU raised `expect_vector`
+/// (13=#GP, 14=#PF) — proof the boundary held. The fault handler unwinds us back
+/// here; if the blob had somehow *not* faulted, `usermode_enter` would spin in
+/// the blob's `jmp $` and this would hang (a visible failure), so returning at
+/// all already means a fault was taken.
+fn run_violation(what: &str, blob: &[u8], expect_vector: u64) {
+    let (code_frame, stack_frame) = map_user_program(blob);
+    LAST_VIOLATION.store(0, Ordering::SeqCst);
+    serial_println!("[m13] ring 3 will attempt: {} — expecting the CPU to fault", what);
+
+    let was = interrupts::save_and_disable();
+    // SAFETY: same preconditions as `self_test`'s launch; the violation is caught
+    // by the ring-3 fault arm, which unwinds via `recover_from_violation`.
+    unsafe {
+        usermode_enter(UVA_CODE, UVA_STACK_TOP);
+    }
+    interrupts::restore(was);
+
+    let caught = LAST_VIOLATION.load(Ordering::SeqCst);
+    assert_eq!(
+        caught, expect_vector,
+        "ring-3 {} should have raised vector {}, but the caught vector was {}",
+        what, expect_vector, caught
+    );
+    unmap_user_program(code_frame, stack_frame);
+}
+
+/// Map a blob's code (PRESENT|USER, executable, not writable) at `UVA_CODE` and a
+/// writable user stack at `UVA_STACK`, returning the backing frames. Shared by
+/// the syscall excursion and the enforcement test.
+fn map_user_program(blob: &[u8]) -> (PhysFrame, PhysFrame) {
+    let code_frame = frame_allocator::alloc().expect("usermode: no frame for user code");
+    let code_phys = code_frame.start_address();
+    // SAFETY: `code_phys` is a fresh, identity-mapped frame; the blob is far
+    // smaller than a 4 KiB page.
+    unsafe {
+        core::ptr::copy_nonoverlapping(blob.as_ptr(), code_phys as *mut u8, blob.len());
+    }
+    paging::map_user_page(UVA_CODE, code_phys, 0).expect("usermode: map user code");
+
+    let stack_frame = frame_allocator::alloc().expect("usermode: no frame for user stack");
+    let stack_phys = stack_frame.start_address();
+    paging::map_user_page(UVA_STACK, stack_phys, paging::WRITABLE).expect("usermode: map user stack");
+    (code_frame, stack_frame)
+}
+
+/// Unmap and free a program mapped by [`map_user_program`]. The intermediate
+/// page tables leak, exactly like the paging self-tests (reclaiming empty tables
+/// is a later refinement) — a bounded, deliberate cost.
+fn unmap_user_program(code_frame: PhysFrame, stack_frame: PhysFrame) {
     paging::unmap_page(UVA_CODE);
     paging::unmap_page(UVA_STACK);
     frame_allocator::free(code_frame);
     frame_allocator::free(stack_frame);
-
-    serial_println!("M13: userspace online");
 }

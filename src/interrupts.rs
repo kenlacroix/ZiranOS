@@ -252,6 +252,45 @@ pub extern "C" fn interrupt_dispatch(ctx: &mut InterruptContext) {
             serial_println!("[trap] #BP at {:#018x} handled", rip);
         }
 
+        // Milestone 13 — the enforcement gate (the M15 privilege-boundary preview).
+        // A #GP or #PF taken *from ring 3* (saved CS shows CPL 3) is a deliberate
+        // boundary violation: ring 3 ran a privileged instruction (`cli` → #GP) or
+        // touched a kernel-only page (`mov rax,[0xb8000]` → #PF, U/S bit set). The
+        // CPU stopping it *is* the boundary working. Report it — with the faulting
+        // CS proving CPL 3 — then unwind the excursion back to ring 0 rather than
+        // halting the kernel (a ring-0 fault below still halts, being a real bug).
+        v @ (13 | 14) if ctx.cs & 3 == 3 => {
+            let name = EXCEPTIONS.get(v).copied().unwrap_or("exception");
+            println!(
+                "[m13] blocked ring-3 violation: {} at RIP={:#018x} CS={:#x} (CPL={})",
+                name,
+                ctx.rip,
+                ctx.cs,
+                ctx.cs & 3
+            );
+            serial_println!(
+                "[m13] blocked ring-3 violation: {} at RIP={:#018x} CS={:#x} (CPL={}) err={:#x}",
+                name,
+                ctx.rip,
+                ctx.cs,
+                ctx.cs & 3,
+                ctx.error_code
+            );
+            if v == 14 {
+                // #PF: CR2 is the address ring 3 tried to touch; the error-code
+                // U/S bit (bit 2) set proves the CPU denied a *user-mode* access.
+                let cr2 = read_cr2();
+                let user_access = ctx.error_code & 0b100 != 0;
+                serial_println!(
+                    "  -> tried to touch {:#018x}: {} (U/S bit set: {})",
+                    cr2,
+                    describe_page_fault(ctx.error_code),
+                    user_access
+                );
+            }
+            crate::usermode::recover_from_violation(ctx, v as u64);
+        }
+
         // #PF Page Fault: the address that faulted is in CR2, and the error code
         // is a bitfield describing the access. We can't recover yet (paging
         // management is Milestones 6-7), so we report richly and halt.

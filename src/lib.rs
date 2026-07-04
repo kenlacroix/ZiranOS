@@ -232,6 +232,12 @@ pub extern "C" fn kernel_main(multiboot_info_addr: u64) -> ! {
     // scheduler is a deferred M13 cut) and guards itself against the timer.
     usermode::self_test();
 
+    // Milestone 13 (step 5): the enforcement test — the M15 preview. Two ring-3
+    // blobs deliberately violate the boundary (run `cli`, read a kernel page); the
+    // CPU faults (#GP / #PF) and the handler catches each from CPL 3 and unwinds.
+    // This is the proof the boundary is real, not just unused.
+    usermode::enforcement_test();
+
     task::init();
     task::spawn(shell::shell_main);
     task::yield_now();
