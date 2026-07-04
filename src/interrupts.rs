@@ -15,12 +15,22 @@
 //! The per-vector entry stubs live in `boot/isr.asm`; this file is the Rust half
 //! that builds the table and decides what each fault *means*.
 
-use crate::{hlt_loop, keyboard, pic, println, serial_println};
+use crate::{hlt_loop, keyboard, pic, print, println, serial_println};
 
 /// The vector the timer's IRQ0 is remapped to (see `pic`): 0x20 + 0 = 0x20.
 const TIMER_VECTOR: usize = pic::PIC1_OFFSET as usize;
 /// The vector the keyboard's IRQ1 is remapped to (see `pic`): 0x20 + 1 = 0x21.
 const KEYBOARD_VECTOR: usize = pic::PIC1_OFFSET as usize + 1;
+
+/// Milestone 13: the software-interrupt vector ring-3 code uses to call the
+/// kernel — the classic `int 0x80`. Its gate is installed at DPL 3 (see
+/// [`IdtEntry::set_user_handler`]) so ring 3 may invoke it.
+const SYSCALL_VECTOR: usize = 0x80;
+
+/// Syscall numbers, passed by the caller in `rax`. The minimal M13 set: print one
+/// character (`rdi` = the byte) and signal the user excursion is finished.
+pub const SYS_PRINT: u64 = 1;
+pub const SYS_EXIT: u64 = 2;
 
 /// The exact register state our assembly stub (`isr_common` in boot/isr.asm)
 /// leaves on the stack, in ascending memory order. `interrupt_dispatch` receives
@@ -87,18 +97,35 @@ impl IdtEntry {
         }
     }
 
-    /// Point this gate at `handler`, running under code segment `selector`.
-    fn set_handler(&mut self, handler: u64, selector: u16) {
+    /// Point this gate at `handler`, running under code segment `selector`, with
+    /// the given `type_attr` (present bit | DPL | gate type). The 64-bit handler
+    /// address is split across the three offset fields.
+    fn set_gate(&mut self, handler: u64, selector: u16, type_attr: u8) {
         self.offset_low = handler as u16;
         self.offset_mid = (handler >> 16) as u16;
         self.offset_high = (handler >> 32) as u32;
         self.selector = selector;
         self.ist = 0;
-        // 0x8E = present (0x80) | DPL 0 | type 0xE (64-bit *interrupt* gate).
-        // An interrupt gate clears the interrupt flag on entry, so a handler is
-        // not itself interrupted before it is ready — the safe default.
-        self.type_attr = 0x8E;
+        self.type_attr = type_attr;
         self.reserved = 0;
+    }
+
+    /// The default: a ring-0-only interrupt gate.
+    /// 0x8E = present (0x80) | DPL 0 | type 0xE (64-bit *interrupt* gate). An
+    /// interrupt gate clears the interrupt flag on entry, so a handler is not
+    /// itself interrupted before it is ready — the safe default.
+    fn set_handler(&mut self, handler: u64, selector: u16) {
+        self.set_gate(handler, selector, 0x8E);
+    }
+
+    /// Milestone 13: a gate ring-3 code may invoke with `int` — the syscall gate.
+    /// 0xEE = present | **DPL 3** | 64-bit interrupt gate. The DPL 3 is required:
+    /// the CPU checks `CPL <= gate.DPL` on a software `int`, so an `int 0x80` from
+    /// ring 3 through a DPL-0 gate raises #GP instead of entering the handler.
+    /// Still an *interrupt* gate (IF cleared on entry), so the syscall handler is
+    /// not itself preemptible.
+    fn set_user_handler(&mut self, handler: u64, selector: u16) {
+        self.set_gate(handler, selector, 0xEE);
     }
 }
 
@@ -144,6 +171,12 @@ pub fn init() {
         for vector in 0..256 {
             idt.entries[vector].set_handler(isr_stub_table[vector], KERNEL_CODE_SELECTOR);
         }
+        // Milestone 13: re-arm the syscall vector as a DPL-3 gate so ring-3 code
+        // can reach it. Same stub as every other vector (isr_common saves the full
+        // context and iretqs); only the gate privilege differs. Not reachable from
+        // ring 3 until the iretq launch (step 4), but a ring-0 `int 0x80` already
+        // exercises the dispatch (see `syscall_self_test`).
+        idt.entries[SYSCALL_VECTOR].set_user_handler(isr_stub_table[SYSCALL_VECTOR], KERNEL_CODE_SELECTOR);
 
         let pointer = IdtPointer {
             limit: (core::mem::size_of::<Idt>() - 1) as u16,
@@ -206,7 +239,7 @@ const EXCEPTIONS: [&str; 32] = [
 /// held, so this is safe today; a lock-free emergency writer is the proper fix
 /// once faults can occur at arbitrary points.
 #[no_mangle]
-pub extern "C" fn interrupt_dispatch(ctx: &InterruptContext) {
+pub extern "C" fn interrupt_dispatch(ctx: &mut InterruptContext) {
     let vector = ctx.vector as usize;
 
     match vector {
@@ -261,6 +294,11 @@ pub extern "C" fn interrupt_dispatch(ctx: &InterruptContext) {
             pic::send_eoi(1);
         }
 
+        // Milestone 13: the syscall gate. A software `int 0x80` lands here — from
+        // ring 0 in the step-3 self-test, and from ring 3 once the launch exists.
+        // No PIC EOI: this is a software interrupt, not a hardware IRQ.
+        SYSCALL_VECTOR => syscall(ctx),
+
         // Any other vector in the PIC's range (0x20..0x2F) that we didn't
         // unmask: almost certainly a *spurious* interrupt, which real PICs emit
         // on IRQ7/IRQ15 when a line glitches. Do NOT halt over one, and — key
@@ -275,6 +313,68 @@ pub extern "C" fn interrupt_dispatch(ctx: &InterruptContext) {
             halt();
         }
     }
+}
+
+/// Service a `int 0x80` syscall. The number is in `rax`, arguments in
+/// `rdi`/`rsi`/`rdx`; the return value is written back into `rax`, which
+/// `isr_common` restores on `iretq` (it saved the context from this same stack
+/// slot). The saved `CS` reveals the caller's privilege — `cs & 3` is the CPL,
+/// which is **3** when the call genuinely came from ring 3. That check is the
+/// M13 "working vs. accidentally working" gate: the caller's self-test asserts
+/// the CPL, so a syscall accidentally serviced from ring 0 can't masquerade as a
+/// ring-3 crossing.
+fn syscall(ctx: &mut InterruptContext) {
+    let number = ctx.rax;
+    let cpl = ctx.cs & 3;
+    match number {
+        SYS_PRINT => {
+            // One character, passed by value in rdi — no user pointer to validate
+            // yet (that, and copy-from-user, is the deferred M15 "confused deputy"
+            // surface). Print it to VGA (the visible demo) and serial (CI).
+            let ch = ctx.rdi as u8 as char;
+            print!("{}", ch);
+            serial_println!("[m13] syscall: SYS_PRINT {:?} (CS={:#x}, CPL={})", ch, ctx.cs, cpl);
+            ctx.rax = 0; // success
+        }
+        SYS_EXIT => {
+            // The user excursion is finished. The minimal cut only reports it here;
+            // actually *unwinding* to ring 0 (rather than iretq-ing back to the
+            // blob) is wired with the launch in the next step.
+            serial_println!("[m13] syscall: SYS_EXIT (CS={:#x}, CPL={})", ctx.cs, cpl);
+            ctx.rax = 0;
+        }
+        _ => {
+            serial_println!("[m13] syscall: unknown number {} (CPL={})", number, cpl);
+            ctx.rax = u64::MAX; // -1: unknown syscall
+        }
+    }
+}
+
+/// Milestone 13 (step 3): prove the syscall path end-to-end *before* ring 3
+/// exists, by issuing `int 0x80` from ring 0. The DPL-3 gate accepts it (CPL 0 ≤
+/// gate DPL 3), the dispatcher services `SYS_PRINT`, and the result returns in
+/// `rax`. From ring 0 the handler reports `CPL=0` — which is exactly right, and
+/// confirms the CPL readout is live: step 4 issues the same call from ring 3 and
+/// must instead see `CPL=3`. Runs with interrupts still masked, so nothing holds
+/// the print lock the handler takes — no deadlock window.
+pub fn syscall_self_test() {
+    let ret: u64;
+    // SAFETY: `int 0x80` traps into our own DPL-3 gate; `isr_common` saves and
+    // restores every register, so only rax (in: number, out: result) and rdi (in:
+    // the char) participate. No memory the compiler tracks is clobbered beyond the
+    // print, which the default (non-`nomem`) options already assume.
+    unsafe {
+        core::arch::asm!(
+            "int 0x80",
+            inout("rax") SYS_PRINT => ret,
+            in("rdi") b'?' as u64,
+        );
+    }
+    assert_eq!(ret, 0, "SYS_PRINT should return 0, got {:#x}", ret);
+    serial_println!(
+        "[ok] M13: int 0x80 syscall gate wired — SYS_PRINT dispatched from ring 0 (CPL=0), returned {}",
+        ret
+    );
 }
 
 /// Are hardware interrupts currently enabled (RFLAGS.IF set)?

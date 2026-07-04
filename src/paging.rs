@@ -57,6 +57,12 @@ pub const WRITABLE: u64 = 1 << 1;
 /// Page Size: at the PD level, this entry maps a 2 MiB page directly instead of
 /// pointing at a page table. (The boot code identity-maps 1 GiB with these.)
 const HUGE: u64 = 1 << 7;
+/// User/Supervisor: 0 = ring-0-only (the default for every mapping so far,
+/// which is *why* ring 3 can't touch kernel memory), 1 = reachable from ring 3.
+/// Milestone 13: user pages set this on the leaf **and every table above it** —
+/// the CPU ANDs U/S down the whole walk, so one missing bit anywhere denies the
+/// access. Public so `usermode` can name the flag; [`map_user_page`] threads it.
+pub const USER: u64 = 1 << 2;
 
 /// The physical memory we identity-map: the first 1 GiB. Every physical address
 /// the kernel touches (all usable RAM is < 126 MiB, plus VGA at 0xb8000) falls
@@ -281,13 +287,42 @@ pub enum MapError {
 /// Map the 4 KiB page at virtual address `virt` to physical address `phys`, with
 /// `flags` (PRESENT is added automatically). Allocates and links any missing
 /// intermediate tables from the frame allocator. `virt`/`phys` are rounded down
-/// to their 4 KiB page. Fails with [`MapError::HugePage`] if the address is
-/// already inside a huge page (we don't split), or [`MapError::OutOfFrames`] if a
-/// table frame can't be allocated.
+/// to their 4 KiB page. The mapping is **supervisor-only** (U/S=0) — ring 3
+/// cannot reach it. Fails with [`MapError::HugePage`] if the address is already
+/// inside a huge page (we don't split), or [`MapError::OutOfFrames`] if a table
+/// frame can't be allocated.
 pub fn map_page(virt: u64, phys: u64, flags: u64) -> Result<(), MapError> {
+    map_inner(virt, phys, flags, false)
+}
+
+/// Like [`map_page`], but marks the leaf **and every table on the walk**
+/// user-accessible (U/S=1), so code running in ring 3 can touch it — the M13
+/// user code and user stack are mapped with this.
+///
+/// The whole subtlety lives here: the hardware page-walk ANDs the U/S bit at
+/// every level, so a user leaf under a supervisor-only PML4/PDPT/PD entry is
+/// still unreachable from ring 3 (it would #PF on the very first access). So this
+/// sets U/S on the tables it *creates* and OR-s U/S into any table that already
+/// exists on the path — notably `PML4[0]`, which is shared with the kernel
+/// identity map. That is safe: setting U/S on an upper entry only *permits* user
+/// access to continue downward; the kernel's own leaves stay U/S=0, so no kernel
+/// page becomes user-readable. (This is exactly what keeps the M15 secret safe.)
+pub fn map_user_page(virt: u64, phys: u64, flags: u64) -> Result<(), MapError> {
+    map_inner(virt, phys, flags, true)
+}
+
+/// Shared walk for [`map_page`] / [`map_user_page`]. When `user`, U/S=1 is added
+/// to created intermediates, OR-ed into existing intermediates on the path, and
+/// set on the leaf; when not, behaviour is the original supervisor-only mapping.
+fn map_inner(virt: u64, phys: u64, flags: u64, user: bool) -> Result<(), MapError> {
     let virt = virt & !(FRAME_SIZE - 1);
     let phys = phys & !(FRAME_SIZE - 1);
     let mut table_phys = read_cr3() & ADDR_MASK;
+    let new_table = if user {
+        PRESENT | WRITABLE | USER
+    } else {
+        PRESENT | WRITABLE
+    };
 
     // Descend PML4 -> PDPT -> PD, creating any missing table, to reach the PT.
     for level in (1..=3).rev() {
@@ -301,18 +336,27 @@ pub fn map_page(virt: u64, phys: u64, flags: u64) -> Result<(), MapError> {
             if level <= 2 && entry & HUGE != 0 {
                 return Err(MapError::HugePage);
             }
+            // For a user mapping, an already-present intermediate (e.g. the shared
+            // PML4[0]) may lack U/S=1 — OR it in so the walk can reach the user
+            // leaf. Only ever *adds* a permission; never touches the address bits.
+            if user && entry & USER == 0 {
+                // SAFETY: `table_phys` is the identity-mapped table we just read
+                // `entry` from; we rewrite the same slot with one extra flag bit.
+                unsafe { write_entry(table_phys, index, entry | USER) };
+            }
             table_phys = entry & ADDR_MASK;
         } else {
             let next = alloc_table().ok_or(MapError::OutOfFrames)?;
             // SAFETY: `table_phys` is a valid, identity-mapped table frame.
-            unsafe { write_entry(table_phys, index, next | PRESENT | WRITABLE) };
+            unsafe { write_entry(table_phys, index, next | new_table) };
             table_phys = next;
         }
     }
 
     // `table_phys` is the PT; install the leaf entry.
+    let leaf = phys | flags | PRESENT | if user { USER } else { 0 };
     // SAFETY: `table_phys` is the identity-mapped PT frame for this address.
-    unsafe { write_entry(table_phys, table_index(virt, 0), phys | flags | PRESENT) };
+    unsafe { write_entry(table_phys, table_index(virt, 0), leaf) };
     flush_tlb(virt);
     Ok(())
 }
@@ -395,4 +439,71 @@ pub fn self_test() {
         "paging self-test should leak exactly the two intermediate tables"
     );
     crate::serial_println!("[ok] paging: self-test left 2 intermediate tables mapped (expected)");
+}
+
+/// Milestone 13 (step 2): prove [`map_user_page`] marks U/S=1 at **every level**
+/// of the walk, not just the leaf — the one subtlety that decides whether ring-3
+/// code can reach the page or #PFs on its first access. Maps a fresh frame at a
+/// user VA, then re-walks the live tables and asserts PRESENT|USER on the PML4,
+/// PDPT, PD, and PT entries plus the leaf, and round-trips a sentinel through it.
+///
+/// Uses 2 GiB — clear of both the identity window (< 1 GiB) and the M8 heap
+/// region (mapped at 1 GiB) and self-test's own 1 GiB subtree — so its two-frame
+/// intermediate leak is deterministic no matter what ran before it.
+pub fn user_map_self_test() {
+    const UVA: u64 = 2 * (1 << 30); // 2 GiB
+    const SENTINEL: u32 = 0x5EED_C0DE;
+
+    let free_before = frame_allocator::free_frame_count();
+    assert_eq!(translate(UVA), None, "user-map self-test: address should start unmapped");
+
+    let frame = frame_allocator::alloc().expect("user-map self-test: no free frame");
+    let phys = frame.start_address();
+    map_user_page(UVA, phys, WRITABLE).expect("user-map self-test: map_user_page failed");
+
+    // The whole point: U/S=1 at PML4 -> PDPT -> PD (the tables on the path)...
+    let mut table_phys = read_cr3() & ADDR_MASK;
+    for level in (1..=3).rev() {
+        // SAFETY: `table_phys` is CR3's PML4, then a present next-level frame we
+        // just read — all within the identity map.
+        let entry = unsafe { read_entry(table_phys, table_index(UVA, level)) };
+        assert!(entry & PRESENT != 0, "user walk: level {} not present", level);
+        assert!(
+            entry & USER != 0,
+            "user walk: level {} missing U/S — ring 3 would #PF before reaching the leaf",
+            level
+        );
+        table_phys = entry & ADDR_MASK;
+    }
+    // ...and on the leaf itself.
+    // SAFETY: `table_phys` is the identity-mapped PT frame for UVA.
+    let leaf = unsafe { read_entry(table_phys, table_index(UVA, 0)) };
+    assert!(
+        leaf & (PRESENT | USER) == (PRESENT | USER),
+        "user leaf missing PRESENT|USER: {:#x}",
+        leaf
+    );
+
+    // And it still aliases its frame like any mapping (write via UVA, read via phys).
+    // SAFETY: UVA is mapped writable to `phys`; `phys` (< 126 MiB) is readable
+    // through the identity map. Both name the same real frame.
+    unsafe { core::ptr::write_volatile(UVA as *mut u32, SENTINEL) };
+    let via_phys = unsafe { core::ptr::read_volatile(phys as *const u32) };
+    assert_eq!(via_phys, SENTINEL, "user page must alias its frame");
+    crate::serial_println!(
+        "[ok] paging: user page {:#014x} has U/S=1 at all 4 levels + leaf — reachable from ring 3",
+        UVA
+    );
+
+    assert!(unmap_page(UVA), "unmap should succeed on the mapped user page");
+    frame_allocator::free(frame);
+    // Like `self_test`, map_user_page allocated a PD + PT (2 frames) for the fresh
+    // PDPT[2] subtree; unmap clears only the leaf, so those two are a bounded,
+    // deliberate leak. (OR-ing U/S into the pre-existing PML4[0] cost no frame.)
+    assert_eq!(
+        frame_allocator::free_frame_count(),
+        free_before - 2,
+        "user-map self-test should leak exactly the two intermediate tables"
+    );
+    crate::serial_println!("[ok] paging: user-map self-test left 2 intermediate tables mapped (expected)");
 }

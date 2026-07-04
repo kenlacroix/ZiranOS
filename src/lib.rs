@@ -27,6 +27,7 @@ use core::panic::PanicInfo;
 
 mod frame_allocator;
 mod fs;
+mod gdt;
 mod heap;
 mod interrupts;
 mod keyboard;
@@ -120,6 +121,15 @@ pub extern "C" fn kernel_main(multiboot_info_addr: u64) -> ! {
         frame_allocator::free_frame_count() / 256
     );
 
+    // Milestone 13 (groundwork): replace the two-entry boot GDT with a full one
+    // built in Rust — adding ring-3 code/data descriptors and a TSS whose RSP0
+    // will catch the ring 3 → ring 0 transition. No ring-3 code runs yet; this
+    // just proves the kernel still boots on descriptor tables it owns (the self-
+    // test asserts `tr`=0x28). Must precede the IDT: both are descriptor tables,
+    // and the syscall gate (later) will reference user privilege levels.
+    gdt::init();
+    gdt::self_test();
+
     // Milestone 4: install the interrupt handlers, then prove they work by
     // deliberately triggering a breakpoint. A working IDT catches the `int3`,
     // reports it, and returns here so the kernel keeps running — the difference
@@ -133,6 +143,12 @@ pub extern "C" fn kernel_main(multiboot_info_addr: u64) -> ! {
     }
     println!("[ok] survived the breakpoint -- interrupts work, execution resumed");
 
+    // Milestone 13 (step 3): the syscall gate. Vector 0x80 is now a DPL-3 gate, so
+    // ring-3 code will be able to `int 0x80` (step 4). Prove the dispatch works now
+    // by issuing it from ring 0 — the same gate accepts CPL 0, and the handler
+    // reports CPL=0, confirming the syscall path end to end before any ring-3 code.
+    interrupts::syscall_self_test();
+
     // Milestone 7: build our own page tables and switch CR3 to them. The IDT is
     // already installed (a mapping bug would surface as a reported #PF), and
     // interrupts are still masked, so the switch happens in a quiet moment. If the
@@ -140,6 +156,11 @@ pub extern "C" fn kernel_main(multiboot_info_addr: u64) -> ! {
     // fault here instead of printing the marker.
     paging::init();
     paging::self_test();
+    // Milestone 13 (step 2): prove user-accessible mappings set U/S=1 at every
+    // level of the walk (the leaf alone is not enough — the CPU ANDs U/S down the
+    // whole chain). No ring-3 code runs yet; this pins the paging primitive that
+    // the userspace excursion will depend on.
+    paging::user_map_self_test();
     println!("[ok] paging: switched to kernel-built page tables");
 
     // Milestone 8: stand up the kernel heap on the new page tables, then prove
