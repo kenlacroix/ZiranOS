@@ -18,10 +18,12 @@
 //!     (holding it across the switch would deadlock the resumed task).
 //!   - Commit 3 (M9b): the PIT and preemption, reusing this same switch.
 
+use crate::interrupts;
 use alloc::boxed::Box;
 use alloc::collections::VecDeque;
 use alloc::string::String;
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicBool, Ordering};
 use spin::Mutex;
 
 extern "C" {
@@ -156,48 +158,75 @@ fn spawn(entry: extern "C" fn()) -> u64 {
     id
 }
 
-/// Cooperatively hand the CPU to the next runnable task. Picks the next ready
-/// task (falling back to the idle task when none remain), requeues the outgoing
-/// task unless it is idle or finished, then switches.
+/// Hand the CPU to the next runnable task. Picks the next ready task (falling
+/// back to the idle task when none remain), requeues the outgoing task unless it
+/// is idle or finished, then switches. Used both cooperatively (a task calling it
+/// voluntarily) and by [`preempt`] from the timer IRQ.
 ///
-/// The critical discipline: everything the switch needs — a raw pointer to the
-/// outgoing task's `saved_sp` and the incoming task's `saved_sp` value — is
-/// extracted while the lock is held, and the guard is **dropped before**
-/// `switch_context`. Holding it across the switch would deadlock the instant the
-/// resumed task called back into the scheduler.
+/// Two disciplines keep this correct on a single core:
+///
+///   1. **Drop the lock before switching.** Everything the switch needs — a raw
+///      pointer to the outgoing task's `saved_sp` and the incoming task's
+///      `saved_sp` value — is extracted while the lock is held, then the guard is
+///      dropped *before* `switch_context`. Holding it across the switch would
+///      deadlock the instant the resumed task called back into the scheduler.
+///   2. **Disable interrupts across the critical section.** Once tasks run with
+///      interrupts on (Milestone 9b), a timer tick could otherwise fire while we
+///      hold the scheduler lock, re-enter through `preempt`, and deadlock. We
+///      clear IF for the lock *and* the switch, then restore it — to its prior
+///      value — once resumed. (A preempted task's true IF is restored later by
+///      `iretq`; a cooperative caller's by this `restore`.)
 pub fn yield_now() {
-    let (old_sp_ptr, new_sp): (*mut u64, u64) = {
+    let flags = interrupts::save_and_disable();
+
+    let switch: Option<(*mut u64, u64)> = {
         let mut guard = SCHED.lock();
         let sched = guard.as_mut().expect("task::yield_now before init");
 
         let old = sched.current;
         let next = sched.ready.pop_front().unwrap_or(IDLE);
 
-        // Only ourselves is runnable (idle yielding into an empty queue). Do not
-        // "switch to self": `new_sp` would be this task's *stale* parked pointer.
         if next == old {
-            return;
-        }
+            // Only ourselves is runnable (idle yielding into an empty queue). Do
+            // not "switch to self": `new_sp` would be a *stale* parked pointer.
+            None
+        } else {
+            // Requeue the outgoing task unless it is the idle task or has finished.
+            if old != IDLE && sched.tasks[old].state != State::Finished {
+                sched.tasks[old].state = State::Ready;
+                sched.ready.push_back(old);
+            }
+            sched.tasks[next].state = State::Running;
+            sched.current = next;
 
-        // Requeue the outgoing task unless it is the idle task or has finished.
-        if old != IDLE && sched.tasks[old].state != State::Finished {
-            sched.tasks[old].state = State::Ready;
-            sched.ready.push_back(old);
+            let old_sp_ptr = &mut sched.tasks[old].saved_sp as *mut u64;
+            let new_sp = sched.tasks[next].saved_sp;
+            Some((old_sp_ptr, new_sp))
         }
-        sched.tasks[next].state = State::Running;
-        sched.current = next;
-
-        let old_sp_ptr = &mut sched.tasks[old].saved_sp as *mut u64;
-        let new_sp = sched.tasks[next].saved_sp;
-        (old_sp_ptr, new_sp)
     }; // guard dropped here — before the switch
 
-    // SAFETY: `old_sp_ptr` points at the outgoing task's `saved_sp` inside the
-    // scheduler's `Vec`, which is stable (we never spawn mid-switch); `new_sp` is
-    // the incoming task's parked stack, fabricated by `Task::new` or written by a
-    // prior `switch_context`. The lock is released, so the resumed task may
-    // re-enter the scheduler freely.
-    unsafe { switch_context(old_sp_ptr, new_sp) };
+    if let Some((old_sp_ptr, new_sp)) = switch {
+        // SAFETY: `old_sp_ptr` points at the outgoing task's `saved_sp` inside the
+        // scheduler's `Vec`, which is stable (we never spawn mid-switch); `new_sp`
+        // is the incoming task's parked stack, fabricated by `Task::new` or
+        // written by a prior `switch_context`. The lock is released, so the
+        // resumed task may re-enter the scheduler freely.
+        unsafe { switch_context(old_sp_ptr, new_sp) };
+    }
+
+    interrupts::restore(flags);
+}
+
+/// Preemptive reschedule, driven by the timer IRQ (see `interrupt_dispatch`).
+/// Mechanically identical to [`yield_now`] — the timer simply forces the switch a
+/// cooperative task would otherwise make on its own. Safe to call from the IRQ
+/// handler because `switch_context` is an ordinary `extern "C"` call: the
+/// interrupted task's caller-saved registers are already preserved in the
+/// `InterruptContext` on its stack, and when the task is later resumed, control
+/// unwinds back through here to `isr_common`'s `iretq`, which restores its full
+/// register state and interrupt flag.
+pub fn preempt() {
+    yield_now();
 }
 
 /// Retire the current task and yield forever. Called by `task_trampoline` when a
@@ -206,6 +235,13 @@ pub fn yield_now() {
 /// `yield_now` will not switch back to it.
 #[no_mangle]
 pub extern "C" fn task_exit() -> ! {
+    // This task is retiring and will never be resumed. Disable interrupts for
+    // good (we never restore) so we cannot be preempted while holding a lock — the
+    // serial lock during the message below, or the scheduler lock. A task parked
+    // forever while still holding a lock would wedge every other task. The task we
+    // switch to restores its own interrupt flag (via `iretq` or its own yield).
+    interrupts::save_and_disable();
+
     let finished_id = {
         let mut guard = SCHED.lock();
         let sched = guard.as_mut().expect("task::task_exit before init");
@@ -308,4 +344,76 @@ pub fn cooperative_self_test() {
         ITERS
     );
     crate::serial_println!("M9: cooperative scheduler online");
+}
+
+// --- Preemptive self-test (Milestone 9b) ------------------------------------
+//
+// The proof that preemption is real and not secretly cooperative: two tasks that
+// NEVER call yield_now. The "waiter" spins on a flag; the "setter" flips it. The
+// waiter can make progress only if the timer interrupt forcibly takes the CPU
+// away from it and runs the setter. If preemption were broken the waiter would
+// spin forever and the boot test would time out — so merely reaching the marker
+// proves the timer preempts.
+
+static PREEMPT_FLAG: AtomicBool = AtomicBool::new(false);
+static WAITER_SAW_FLAG: AtomicBool = AtomicBool::new(false);
+
+extern "C" fn preempt_waiter() {
+    // A task must have interrupts enabled to be preempted, and a freshly
+    // bootstrapped task starts with them off (the switch into it ran with IF
+    // clear). Enable them, then spin with NO yield — only the timer can break us
+    // out of this loop.
+    interrupts::enable();
+    while !PREEMPT_FLAG.load(Ordering::Acquire) {
+        core::hint::spin_loop();
+    }
+    WAITER_SAW_FLAG.store(true, Ordering::Release);
+}
+
+extern "C" fn preempt_setter() {
+    interrupts::enable();
+    // A little bounded work so several timer ticks pass (interleaving us with the
+    // waiter), then set the flag the waiter is spinning on. Also never yields.
+    let mut acc: u64 = 0;
+    for i in 0..3_000_000u64 {
+        acc = acc.wrapping_add(i);
+        core::hint::spin_loop();
+    }
+    core::hint::black_box(acc);
+    PREEMPT_FLAG.store(true, Ordering::Release);
+}
+
+/// Prove preemption, over serial. Builds a fresh scheduler with two non-yielding
+/// tasks and enters it. Because neither task ever yields, the only thing that can
+/// interleave them is the timer IRQ — so completion *is* the proof. Runs after
+/// the PIT is programmed and interrupts are enabled.
+pub fn preemptive_self_test() {
+    // Build the whole run with interrupts OFF, so no half-set-up state (only one
+    // task spawned so far) can be preempted into — that could hang. Interrupts
+    // come back on when kernel_main yields into the scheduler; each worker then
+    // enables its own.
+    let was = interrupts::save_and_disable();
+    init();
+    PREEMPT_FLAG.store(false, Ordering::Release);
+    WAITER_SAW_FLAG.store(false, Ordering::Release);
+    spawn(preempt_waiter);
+    spawn(preempt_setter);
+    interrupts::restore(was);
+
+    // Enter the scheduler as the idle task. Returns once both workers finish.
+    yield_now();
+
+    assert!(
+        WAITER_SAW_FLAG.load(Ordering::Acquire),
+        "preemption failed: the non-yielding waiter never saw the setter run"
+    );
+    let ticks = crate::pit::ticks();
+    assert!(ticks > 0, "timer never fired: no ticks recorded");
+
+    crate::serial_println!(
+        "[ok] scheduler: preemption works -- a task that never yields was \
+         interrupted by the timer and another task ran ({} ticks elapsed)",
+        ticks
+    );
+    crate::serial_println!("M9: preemptive scheduler online");
 }

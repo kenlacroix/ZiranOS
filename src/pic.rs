@@ -75,9 +75,10 @@ pub fn init() {
         outb(PIC2_DATA, MODE_8086);
         io_wait();
 
-        // Masks (1 = masked/disabled). Unmask only IRQ1 on the master; mask the
-        // timer (IRQ0), the cascade, and everything on the slave for now.
-        outb(PIC1_DATA, 0xff & !(1 << 1));
+        // Masks (1 = masked/disabled). Unmask the timer (IRQ0, Milestone 9b) and
+        // the keyboard (IRQ1, Milestone 5) on the master; mask the cascade and
+        // everything on the slave for now. 0xff & ~0b11 = 0xFC.
+        outb(PIC1_DATA, 0xff & !((1 << 1) | (1 << 0)));
         outb(PIC2_DATA, 0xff);
     }
 }

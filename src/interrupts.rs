@@ -17,6 +17,8 @@
 
 use crate::{hlt_loop, keyboard, pic, print, println, serial_println};
 
+/// The vector the timer's IRQ0 is remapped to (see `pic`): 0x20 + 0 = 0x20.
+const TIMER_VECTOR: usize = pic::PIC1_OFFSET as usize;
 /// The vector the keyboard's IRQ1 is remapped to (see `pic`): 0x20 + 1 = 0x21.
 const KEYBOARD_VECTOR: usize = pic::PIC1_OFFSET as usize + 1;
 
@@ -228,6 +230,21 @@ pub extern "C" fn interrupt_dispatch(ctx: &InterruptContext) {
             halt();
         }
 
+        // Timer IRQ0 (Milestone 9b). Count the tick, acknowledge the PIC, then
+        // preempt: hand the CPU to the next runnable task. The order matters —
+        // the EOI MUST precede the switch, or the outgoing task's tick is never
+        // acknowledged and the PIC delivers no more timer interrupts (the clock
+        // appears to hang after one fire). The switch itself reuses the same
+        // `switch_context` a cooperative `yield_now` uses: because we run here
+        // with IF cleared (interrupt gate) and the scheduler lock is
+        // interrupt-safe, this cannot deadlock. This arm MUST stay above the
+        // spurious-range guard below, or IRQ0 would be swallowed as spurious.
+        TIMER_VECTOR => {
+            crate::pit::handle_interrupt();
+            pic::send_eoi(0);
+            crate::task::preempt();
+        }
+
         // Keyboard IRQ (Milestone 5). Read the scancode, echo any character it
         // produced, and — crucially — send the PIC an end-of-interrupt so it
         // will deliver the next keystroke. Then return (iretq) to resume.
@@ -251,6 +268,44 @@ pub extern "C" fn interrupt_dispatch(ctx: &InterruptContext) {
             fatal_header(ctx);
             halt();
         }
+    }
+}
+
+/// Are hardware interrupts currently enabled (RFLAGS.IF set)?
+pub fn are_enabled() -> bool {
+    let flags: u64;
+    // SAFETY: `pushfq; pop` only reads RFLAGS into a register; it modifies no
+    // memory Rust cares about and leaves the flags unchanged.
+    unsafe {
+        core::arch::asm!("pushfq; pop {}", out(reg) flags, options(nomem, preserves_flags));
+    }
+    flags & (1 << 9) != 0
+}
+
+/// Enable hardware interrupts (`sti`). Valid once the IDT and PIC are configured.
+pub fn enable() {
+    // SAFETY: `sti` only sets RFLAGS.IF; always valid in ring 0.
+    unsafe {
+        core::arch::asm!("sti", options(nomem, nostack));
+    }
+}
+
+/// Disable interrupts, returning whether they had been enabled — the "save" half
+/// of a critical-section guard. Pair with [`restore`].
+pub fn save_and_disable() -> bool {
+    let was = are_enabled();
+    // SAFETY: `cli` only clears RFLAGS.IF; always valid in ring 0.
+    unsafe {
+        core::arch::asm!("cli", options(nomem, nostack));
+    }
+    was
+}
+
+/// Restore interrupts to a previously-saved state: re-enable only if they were
+/// enabled when [`save_and_disable`] ran. Never turns on interrupts that were off.
+pub fn restore(was_enabled: bool) {
+    if was_enabled {
+        enable();
     }
 }
 

@@ -70,12 +70,13 @@ switch_context:
 ; `task_exit`, which marks this task Finished and yields to the next runnable one,
 ; never coming back. The halt loop is an unreachable safety net.
 ;
-; NOTE (Milestone 9b): preemption will add an `sti` as the first instruction
-; here, so a task bootstrapped via `ret` (which, unlike `iretq`, does not restore
-; the interrupt flag) runs with interrupts enabled and can be preempted. It is
-; deliberately omitted now: the cooperative self-test runs while interrupts are
-; still masked, before the PIC is configured, so enabling them here would be
-; premature.
+; NOTE on interrupts (Milestone 9b): a task reached this way (via `ret`, not
+; `iretq`) starts with the interrupt flag clear, and this shim deliberately does
+; NOT `sti`. That keeps it neutral: the cooperative self-test's tasks run fully
+; masked (before the PIC is even configured), while a preemptible task enables
+; interrupts itself as its first action (`interrupts::enable()` in src/task.rs) —
+; which is also where the "a task must have interrupts on to be preempted" lesson
+; becomes explicit. A single unconditional `sti` here could not serve both.
 task_trampoline:
     call r15           ; r15 was fabricated to hold the entry fn pointer
     call task_exit     ; the body returned: retire this task; does not return

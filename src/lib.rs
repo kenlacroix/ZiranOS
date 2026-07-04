@@ -32,6 +32,7 @@ mod keyboard;
 mod multiboot;
 mod paging;
 mod pic;
+mod pit;
 mod port;
 mod serial;
 mod task;
@@ -155,23 +156,37 @@ pub extern "C" fn kernel_main(multiboot_info_addr: u64) -> ! {
     task::cooperative_self_test();
     println!("[ok] scheduler: two tasks cooperatively multitask (Milestone 9)");
 
-    // Milestone 5: bring up the keyboard. Remap + mask the PIC first, THEN
-    // enable hardware interrupts — doing it in the other order could let a stray
-    // IRQ fire into an exception vector before the PIC is configured.
+    // Milestone 5: bring up the keyboard. Remap the PIC first, THEN enable
+    // hardware interrupts — doing it in the other order could let a stray IRQ
+    // fire into an exception vector before the PIC is configured. `pic::init`
+    // now unmasks both the keyboard (IRQ1) and the timer (IRQ0, Milestone 9b).
     pic::init();
-    serial_println!("Ziran OS: PIC remapped, keyboard IRQ unmasked.");
+    serial_println!("Ziran OS: PIC remapped, timer + keyboard IRQs unmasked.");
+
+    // Milestone 9b: program the periodic timer BEFORE enabling interrupts, so the
+    // first IRQ0 arrives at our chosen 100 Hz rather than the PIT's power-on
+    // 18.2 Hz default.
+    pit::init(100);
+
     println!();
     println!("keyboard is live -- type something:");
     println!();
 
-    // SAFETY: the IDT (M4) and PIC are configured; it is now safe to let
-    // hardware interrupts through. `sti` sets the interrupt flag.
+    // SAFETY: the IDT (M4), PIC, and PIT are configured; it is now safe to let
+    // hardware interrupts through. `sti` sets the interrupt flag — from here the
+    // timer fires 100×/second and drives preemption.
     unsafe {
         core::arch::asm!("sti", options(nomem, nostack));
     }
 
-    // Idle. The CPU halts until an interrupt (a keystroke) wakes it, the handler
-    // echoes the character, and `iretq` returns us right back here to halt again.
+    // Milestone 9b: prove preemption. Two tasks that NEVER yield are interleaved
+    // purely by the timer interrupt — if that failed, this would hang rather than
+    // return. See src/task.rs.
+    task::preemptive_self_test();
+    println!("[ok] scheduler: preemptive multitasking works (Milestone 9)");
+
+    // Idle. The CPU halts until an interrupt (a timer tick or keystroke) wakes it;
+    // the handler runs and `iretq` returns us right back here to halt again.
     hlt_loop();
 }
 
