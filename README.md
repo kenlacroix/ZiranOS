@@ -128,7 +128,13 @@ so R2 is optional).
 | M13 userspace / ring 3 / syscalls — the first privilege boundary | ✅ **done** |
 | M15 break the privilege boundary (security) — flag capture, confused-deputy syscall | ✅ **done** |
 | M16 break the filesystem boundary (security) — flag capture, aliased-extent exfil | ✅ **done** |
-| M14 networking stub (the last stretch) | ⬜ stretch |
+| M14 networking stub — in-kernel loopback, "hello" over a socket | ✅ **done** |
+
+**The roadmap (M0–M16) is complete.** The core arc reached the file-manager end
+goal; the two security milestones captured a flag behind each boundary and closed
+the gap; the networking stretch shipped a loopback stub. (Built order: the security
+track came before the numerically-earlier networking stretch — breaking a real
+boundary taught more than a stub, so M14 landed last.)
 
 ## What happens when it boots
 
@@ -145,9 +151,10 @@ GRUB (Multiboot2)
                              it (M15); craft a filesystem image whose file extent
                              aliases a hidden on-disk FLAG — the loose reader leaks
                              it, the strict reader's data_end confinement holds
-                             (M16); then spawn a shell task and idle — a `ziran:/>`
-                             prompt you navigate (`help`, `ps`, `mem`, `cd`, `pwd`,
-                             `ls`, `cat`)
+                             (M16); send "hello" over a loopback socket, delivered
+                             by address (M14); then spawn a shell task and idle — a
+                             `ziran:/>` prompt you navigate (`help`, `ps`, `mem`,
+                             `cd`, `pwd`, `ls`, `cat`, `net`)
 ```
 
 Every step is readable and hand-written; there is no `bootimage`/`build.rs`

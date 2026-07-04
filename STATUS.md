@@ -21,7 +21,7 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started
 | 11 | Filesystem (read) | ✅ | `src/fs.rs`: a minimal read-only **ZranFS** over a heap RAM disk. `boot_image()` is an in-kernel `mkfs` (writer) that packs files into a `Vec<u8>` — 16-byte superblock (`ZRFS` magic, version, file_count, total_size), 32-byte dir entries (name + offset + length), flat data. `Fs::mount` is the reader **and** the whole trust boundary: it re-derives the directory from raw bytes trusting only the array, validating magic/version/total_size/dir-fits/every-extent-in-bounds with checked arithmetic. `list`/`read` are then total, panic-free, zero-copy — no `unsafe`. The shell gains `ls`/`cat`. Self-test proves exact bytes + **5** corrupt-image rejections (the M16 seed); `M11:` marker asserted by CI. Custom over FAT16 (no `mkfs.fat` build magic — PLAN §7). See `docs/concepts/filesystem.md`. |
 | 12 | **File manager** (end goal) | ✅ | **The end goal — reached.** ZranFS **v2** adds subdirectories (a directory is a file whose bytes are more entries; one `kind` byte, the delta). `Fs::mount` recurses the tree and is provably safe on any input: a monotonic **high-water-mark** keeps directory tables globally disjoint (validated once → linear, DAGs/cycles → `DirNotForward`) and a `MAX_DEPTH` cap bounds the stack (`TooDeep`). The shell gains `cd`/`pwd`/`ls`/`cat` with a cwd + a pure, unit-tested `canonicalize` (`.`/`..` as string math, no disk parent-pointers) and a `ziran:/docs>` prompt. Driveable in a terminal via the new **serial console** (`make console`). Self-test navigates the tree, reads a subdir file byte-exact, and rejects **10** corrupt images (cycle, deep chain, diamond DAG — no hang, no overflow); `M12:` marker asserted by CI. A hidden `FLAG{…}` (no dir entry) is planted for M16. Completes the core arc. See `docs/concepts/filesystem.md`. |
 | 13 | Userspace / ring 3 / syscalls (stretch) | ✅ | **The project's first CPU privilege boundary — the security track is now open.** `src/gdt.rs` rebuilds the GDT in Rust with ring-3 code/data descriptors + a TSS whose RSP0 catches the ring 3 → 0 transition (`tr=0x28`); `src/paging.rs` adds a `USER` flag + `map_user_page` that sets U/S on the leaf **and every table on the walk** (the CPU ANDs it down the whole chain; kernel leaves stay U/S=0); `src/interrupts.rs` adds a DPL-3 `int 0x80` gate + `syscall` dispatch. **The excursion** (`src/usermode.rs` + `boot/usermode.asm`): a position-independent blob entered by a fabricated `iretq` (CS 0x1b/SS 0x23) prints `'Z'` via `int 0x80` **from CPL 3**, then returns to ring 0 by rewriting the ISR's saved frame. **Enforcement test:** `cli` → #GP and `mov rax,[0xb8000]` → #PF, both caught at CPL 3 (verified by serial + QEMU `-d int`: `v=80`/`v=0d`/`v=0e cpl=3`). `/kernel-review` (no critical/high; 4 low fixes) + `/red-team` (9/9 ring-3 escapes blocked; `sgdt`/`sidt` info-leak found, UMIP would close it) done. Concept doc `docs/concepts/privilege.md`, blog post `docs/blog/13-the-first-wall.md`, web tour step. See `docs/planning/milestone-13-{eng-plan,red-team,retro}.md`. Marker `M13: userspace online`. |
-| 14 | Networking stub (stretch) | ⬜ | |
+| 14 | Networking stub (stretch) | ✅ | **The socket abstraction, with nothing underneath but a buffer — the last roadmap item.** `src/net.rs`: one in-kernel **loopback** interface and a minimal socket layer. A `Frame { src, dst, payload }` (bare `u16` addresses — no IP/ports); a `Socket(u16)` handle with `bind`/`send`/`recv`/`close`; a global `NET: Mutex<Option<Net>>` holding the device's TX queue + a per-address RX queue. `send` only enqueues on the device; `net::poll()` (the loopback step) drains TX and routes each frame to the socket bound to its `dst`, or drops it (a no-route counter) — **TX *is* RX, routed by address.** Four asserted properties make it addressed delivery, not an echo: a frame is `None` at the receiver until `poll` runs (the layers are separate); it arrives byte-exact with `src`/`dst` preserved; a socket bound to a *different* address gets nothing (delivery by address, not broadcast); an unbound destination drops cleanly. Plus `bind`-twice → `AddrInUse`, `recv`-drained → `None`, payload > `MTU` → `TooLong`. A `net` shell command runs a live round-trip. **Deliberately a stub** (scope-guard HOLD): no IP/TCP/UDP/ports/checksums/ARP/routing, no real device, no virtio, no QEMU `-netdev` — the stretch-stub carve-out of the networking non-goal; virtio-net/virtqueues are deferred as their own future *device-driver* milestone. `/kernel-review` clean (no critical/high, no `unsafe`; the plain non-IF-guarded `spin::Mutex` is sound because `NET` is never touched from an IRQ and is always locked with IF=1, so contenders stay preemptible). `/red-team` skipped — no privilege/syscall/FS attack surface (addresses are kernel-chosen). Concept doc `docs/concepts/networking.md`, blog `docs/blog/14-hello-over-a-socket-that-isnt.md`, web tour step. See `docs/planning/milestone-14-eng-plan.md`. Marker `M14: loopback online`. |
 | 15 | Break the privilege boundary (security) | ✅ | **Flag captured, then contained — the confused-deputy lesson.** A `FLAG{…}` is planted on a **kernel-only (U/S=0)** page at 1.5 GiB (`src/usermode.rs`, `map_page` → supervisor leaf). Two ring-3 attacks: a **direct** read of the secret VA → **#PF** (the M13 hardware boundary, held); and the kernel's first **pointer-carrying syscall** as the *confused deputy*. `src/interrupts.rs` adds `SYS_WRITE(ptr,len)` (validated) and `SYS_WRITE_UNCHECKED` (the deliberately-broken twin). The validator `paging::user_range_ok` walks the page tables requiring `PRESENT|USER` at **every** level (ANDing U/S like the MMU), rejecting overflow/non-canonical/kernel ranges **without dereferencing**. Result (all four asserted, CI-pinned): unchecked deputy **leaks** the flag with ring-0 power; validated deputy **rejects** the same kernel pointer (-1, nothing read); validated deputy still **permits** a legit user buffer. **The lesson:** the CPU stops *unauthorized access*, but only software (`copy_from_user`) stops *authorized misuse*. `/kernel-review` clean (no critical/high; 3 low fixes) + `/red-team` (validated path holds vs. aliasing/TOCTOU/arithmetic; the identity-map alias of the secret is stopped by the un-loosened `PDPT[0]` — `map_user_page`'s `virt≥IDENTITY_LIMIT` assert is load-bearing security). Red-team found + fixed **one real DoS**: `user_range_ok` accepted a non-canonical pointer that then #GP'd the kernel in ring 0 — closed by rejecting `end > 2^47`, and pinned as a CI invariant. `sgdt`/`sidt` info-leak still open (UMIP off, a deliberate non-goal). Concept doc `docs/concepts/privilege.md`, blog `docs/blog/15-the-confused-deputy.md`, web tour step. See `docs/planning/milestone-15-eng-plan.md`. Marker `M15: privilege boundary`. |
 | 16 | Break the filesystem boundary (security) | ✅ | **Flag captured, then contained — the confused deputy one layer down (offsets, not pointers).** The hidden `FLAG{ziran-boundary-leak}` (25 B, no directory entry) sits at the image tail. M11's `mount` bounded a file extent only by `total_size` (the whole image) and `read_path` returns `&image[offset..offset+length]` — so a crafted **file entry** whose extent aliases the secret's bytes leaks it. **The fix (a decision you can feel):** format **v2→v3** repurposes the superblock's reserved `u32` at 0x0C as **`data_end`** (where addressable data stops; the secret lives in `[data_end, total)`); strict `Fs::mount` confines **every** entry's extent — file *and* directory table — to `<= data_end` (new `ExtentEscapesData`), while a deliberately-loose `Fs::mount_loose` (the M11-era bound) is kept as the teaching twin. Four asserted, CI-pinned outcomes: navigation **holds** (`/FLAG` → `NotFound`); the loose reader **leaks** the flag (asserted **byte-equal**); strict **rejects** the same crafted image (`ExtentEscapesData`); strict still **permits** legit files byte-exact. `/kernel-review` clean (no critical/high; totality preserved, off-by-one correct, v3 check-ordering keeps all 10 legacy corrupt-image tests tripping their intended error) + `/red-team` (strict `mount` total — no panic/hang — and holds vs. every entry-level attack). **Both reviewers independently found** the same real gap: the ceiling guarded file extents but not `KIND_DIR` tables — closed by confining every entry uniformly, pinned with a synthetic `dir_escape` test. Two residuals kept honestly: a **forged superblock** `data_end` (an in-image field — M15's attacker-controlled-metadata lesson) and **floor-aliasing** (leaks metadata, never the flag). The lesson: **a bounds check is only as trustworthy as the bound it compares against.** Concept doc `docs/concepts/filesystem.md`, blog `docs/blog/16-attacking-the-lies-about-disk-layout.md`, web tour step. See `docs/planning/milestone-16-eng-plan.md`. Marker `M16: filesystem boundary`. |
 | — | Serial console (`make console`) | ✅ | The shell is drivable over COM1. `src/serial.rs` gained a non-blocking `recv`/`read_byte`; the shell task polls it, so keystrokes in and output out flow over the serial line — the only interactive console when the VGA text buffer isn't displayed (UEFI/OVMF). Wire it to your terminal with `make console` (or `./run`); it's also what the recorded web session was captured from. |
@@ -81,28 +81,47 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started
   (off-by-one), a malformed `data_end` → `BadDataEnd`, and a `KIND_DIR` table past
   `data_end` is rejected too (the red-team's scope-asymmetry finding). All 10
   legacy corrupt-image rejections still trip their specific `FsError` under v3.
+- **Networking loopback (M14):** the boot self-test sends `"hello from ziran"`
+  from address 1 to address 2 through the loopback device and asserts the four
+  properties that make it *addressed delivery* rather than an echo — the receiver
+  sees `None` until `poll()` runs (the socket and device layers are separate), the
+  frame arrives **byte-exact** with `src`/`dst` preserved, a socket bound to a
+  different address receives nothing (delivery is by address, not broadcast), and a
+  frame to an unbound address drops cleanly into a no-route counter. Plus a
+  double-`bind` → `AddrInUse`, a drained `recv` → `None`, and an over-`MTU` payload
+  → `TooLong`. Interactive via the `net` shell command over `make console`.
 
-## Next up (the security track + stretch)
+## The roadmap is complete — what's deliberately left undone
 
-The core goal (M12) is met, the first privilege boundary (M13) is built, and
-**both security milestones (M15 privilege, M16 filesystem) are done** — each
-boundary has been attacked in earnest, its flag captured, and the gap closed.
-What's left is the two stretch odds and ends, in any order:
+**Every milestone on the PLAN §5 roadmap (M0–M16) is done.** The core arc (boot →
+memory → tasks → shell → files, M0–M12) reached the stated end goal; the two
+security milestones (M15 privilege, M16 filesystem) attacked each boundary in
+earnest, captured its flag, and closed the gap; and the networking stretch (M14)
+shipped the loopback stub. The build order was honest about priority: the security
+track (13, 15, 16) came *before* the numerically-earlier networking stretch (14),
+because breaking a real boundary taught more than a stub — 14 was built last.
 
-1. **M14 — networking stub** (loopback / trivial virtio-net, "hello" over a
-   socket) — the last remaining roadmap item, and a separate stretch. Note the
-   PLAN §1 non-goal: a *stub*, not a stack.
-2. **Close the M13/M15 `sgdt`/`sidt` leak (optional).** A one-line `CR4.UMIP`
-   write turns the two non-privileged store-descriptor reads into #GP from ring 3.
-   Left open on purpose — it is *hardening*, a PLAN §1 non-goal — but a good
-   "watch the mitigation land" demonstration if a future post wants it.
+What remains is **deliberately** undone — either a non-goal or a clearly-scoped
+future exercise, none of it a gap in the roadmap:
 
-With M16 done, the two security-track lessons rhyme: a bounds check is only as
-good as the bound it trusts. M15's syscall validated *permission but not
-addressability*; M16's `mount` validated *in the image but not within the data
-region*. Both had a residual where the check trusts attacker-influenced input
-(M15's non-canonical pointer — fixed; M16's forged-superblock `data_end` — named,
-the honest edge of a toy FS).
+- **Networking beyond the stub.** A real NIC (virtio-net: PCI enumeration +
+  virtqueues) is its own future *device-driver* milestone, framed as driver
+  learning, not smuggled in under "networking." Any protocol (IP/TCP/UDP, ports,
+  checksums) stays a PLAN §1 non-goal.
+- **The `sgdt`/`sidt` leak (optional).** A one-line `CR4.UMIP` write turns the two
+  non-privileged store-descriptor reads into #GP from ring 3 — left open on
+  purpose (it is *hardening*, a non-goal), a "watch the mitigation land" demo if a
+  future post wants it.
+- **A generated FS fuzzing flood** against the M16-strengthened `mount`, and the
+  two named M16 residuals (forged-superblock `data_end`, floor-aliasing) as sharper
+  targets — a future post, no longer a prerequisite for anything.
+
+The two security-track lessons rhyme, and are the through-line of the finished
+project: a bounds check is only as good as the bound it trusts. M15's syscall
+validated *permission but not addressability*; M16's `mount` validated *in the
+image but not within the data region*. Both carried a residual where the check
+trusts attacker-influenced input (M15's non-canonical pointer — fixed; M16's
+forged-superblock `data_end` — named, the honest edge of a toy FS).
 
 Deferred (fold in when robustness matters):
 - A **TSS + IST stack for the double-fault handler**, so even a stack overflow
