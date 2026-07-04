@@ -12,13 +12,22 @@
 //! the memory work has been building toward: **frames (M6) → pages (M7) → heap
 //! (M8)**. See `docs/concepts/heap.md`.
 //!
-//! (Build step 1: a throwaway *bump* allocator, here only to prove the `alloc`
-//! ceremony links and the region maps. Step 2 replaces it with a free-list that
-//! can actually reclaim — a bump allocator leaks every `Vec` reallocation, the
-//! same reason Milestone 6 rejected one for the frame allocator.)
+//! The allocator is a **linked-list free-list**: every free region stores a small
+//! `ListNode { size, next }` *inside its own memory*, so the free list threads
+//! through the free bytes themselves with no side table. This is the intrusive
+//! free-list idea Milestone 6 wanted but couldn't use for frames (there was no
+//! mapped memory to store the links in yet); Milestone 7 fixed that. A bump
+//! allocator was rejected for the same reason M6 rejected one — it cannot free an
+//! individual allocation, so it leaks every `Vec` reallocation. This one reclaims.
+//!
+//! Honest limitation, documented as the later-refinement hook: `alloc` is
+//! first-fit and `dealloc` does **not** coalesce adjacent free regions, so
+//! fragmentation can accumulate. Merging neighbours is the natural next step (what
+//! a production free list does), deferred here.
 
 use crate::{frame_allocator, paging};
 use core::alloc::{GlobalAlloc, Layout};
+use core::mem::{align_of, size_of};
 use spin::Mutex;
 
 /// Base of the kernel heap: exactly 1 GiB, the first byte past the boot identity
@@ -39,58 +48,134 @@ fn align_up(addr: usize, align: usize) -> usize {
     (addr + align - 1) & !(align - 1)
 }
 
-/// A bump allocator: hand out memory by advancing a cursor. Trivial, and enough
-/// to prove the plumbing — but it cannot free an individual allocation; only when
-/// *every* allocation is released does the cursor reset. Step 2 replaces it.
-struct BumpHeap {
-    start: usize,
-    next: usize,
-    end: usize,
-    allocations: usize,
+/// A node in the free list, stored at the start of the free region it describes.
+struct ListNode {
+    size: usize,
+    next: Option<&'static mut ListNode>,
 }
 
-impl BumpHeap {
-    const fn new() -> BumpHeap {
-        BumpHeap {
-            start: 0,
-            next: 0,
-            end: 0,
-            allocations: 0,
+impl ListNode {
+    const fn new(size: usize) -> ListNode {
+        ListNode { size, next: None }
+    }
+    fn start_addr(&self) -> usize {
+        self as *const ListNode as usize
+    }
+    fn end_addr(&self) -> usize {
+        self.start_addr() + self.size
+    }
+}
+
+/// The free-list allocator. `head` is a dummy node; `head.next` points at the
+/// first real free region.
+struct FreeListHeap {
+    head: ListNode,
+}
+
+impl FreeListHeap {
+    const fn new() -> FreeListHeap {
+        FreeListHeap {
+            head: ListNode::new(0),
         }
     }
 
-    /// Adopt the backed region `[start, start + size)`.
+    /// Adopt the backed region `[start, start + size)` as one initial free block.
     ///
-    /// SAFETY: the caller guarantees the region is mapped, writable, and owned by
-    /// this allocator alone.
+    /// SAFETY: the region must be mapped, writable, and owned by this allocator
+    /// alone; `start` must be `align_of::<ListNode>()`-aligned and `size` at least
+    /// `size_of::<ListNode>()`.
     unsafe fn init(&mut self, start: usize, size: usize) {
-        self.start = start;
-        self.next = start;
-        self.end = start + size;
+        unsafe { self.add_free_region(start, size) };
+    }
+
+    /// Push the free region `[addr, addr + size)` onto the front of the list,
+    /// writing its bookkeeping node into the region's own first bytes.
+    ///
+    /// SAFETY: `[addr, addr + size)` must be mapped, writable, and not otherwise
+    /// in use; it must be node-aligned and node-sized (guaranteed by `size_align`
+    /// for allocations, and by the caller for `init`).
+    unsafe fn add_free_region(&mut self, addr: usize, size: usize) {
+        debug_assert_eq!(align_up(addr, align_of::<ListNode>()), addr);
+        assert!(size >= size_of::<ListNode>(), "heap: free region smaller than a list node");
+        let mut node = ListNode::new(size);
+        node.next = self.head.next.take();
+        let node_ptr = addr as *mut ListNode;
+        // SAFETY: `addr` is a node-aligned, node-sized region we own.
+        unsafe {
+            node_ptr.write(node);
+            self.head.next = Some(&mut *node_ptr);
+        }
+    }
+
+    /// First-fit: find and unlink the first region that can satisfy `size`/`align`,
+    /// returning the removed region and the aligned allocation start.
+    fn find_region(&mut self, size: usize, align: usize) -> Option<(&'static mut ListNode, usize)> {
+        let mut current = &mut self.head;
+        while let Some(ref mut region) = current.next {
+            if let Ok(alloc_start) = Self::alloc_from_region(region, size, align) {
+                let next = region.next.take();
+                let ret = Some((current.next.take().unwrap(), alloc_start));
+                current.next = next;
+                return ret;
+            }
+            current = current.next.as_mut().unwrap();
+        }
+        None
+    }
+
+    /// Can `region` hold `size` bytes at `align`? Returns the aligned start. The
+    /// remainder after the allocation must be either zero or big enough to hold a
+    /// `ListNode` — otherwise it would be an untrackable sliver, so reject and let
+    /// the caller try the next region.
+    fn alloc_from_region(region: &ListNode, size: usize, align: usize) -> Result<usize, ()> {
+        let alloc_start = align_up(region.start_addr(), align);
+        let alloc_end = alloc_start.checked_add(size).ok_or(())?;
+        if alloc_end > region.end_addr() {
+            return Err(()); // doesn't fit
+        }
+        let excess = region.end_addr() - alloc_end;
+        if excess > 0 && excess < size_of::<ListNode>() {
+            return Err(()); // leftover too small to track
+        }
+        Ok(alloc_start)
     }
 
     fn alloc(&mut self, layout: Layout) -> *mut u8 {
-        let start = align_up(self.next, layout.align());
-        let end = match start.checked_add(layout.size()) {
-            Some(end) => end,
-            None => return core::ptr::null_mut(),
-        };
-        if end > self.end {
-            core::ptr::null_mut() // heap exhausted — honest null, not a fake pointer
+        let (size, align) = size_align(layout);
+        if let Some((region, alloc_start)) = self.find_region(size, align) {
+            let alloc_end = alloc_start + size; // checked in alloc_from_region
+            let excess = region.end_addr() - alloc_end;
+            if excess > 0 {
+                // Return the tail of the region to the free list.
+                // SAFETY: `[alloc_end, region.end)` is within the region we just
+                // unlinked; it is node-sized (checked) and mapped/writable.
+                unsafe { self.add_free_region(alloc_end, excess) };
+            }
+            alloc_start as *mut u8
         } else {
-            self.next = end;
-            self.allocations += 1;
-            start as *mut u8
+            core::ptr::null_mut() // honest OOM — not a fake pointer
         }
     }
 
-    fn dealloc(&mut self) {
-        // A bump allocator can only reclaim when the last live allocation goes.
-        self.allocations -= 1;
-        if self.allocations == 0 {
-            self.next = self.start;
-        }
+    fn dealloc(&mut self, ptr: *mut u8, layout: Layout) {
+        let (size, _) = size_align(layout);
+        // Reclaim: thread a fresh node through the returned block. This is what a
+        // bump allocator cannot do — the freed bytes become reusable.
+        // SAFETY: `ptr`/`layout` came from this allocator (caller's contract), so
+        // `[ptr, ptr+size)` is a node-sized, node-aligned block we own.
+        unsafe { self.add_free_region(ptr as usize, size) };
     }
+}
+
+/// Round a request up so every allocation is at least as large and as aligned as a
+/// `ListNode` — a freed block must be able to hold the node that re-links it.
+fn size_align(layout: Layout) -> (usize, usize) {
+    let layout = layout
+        .align_to(align_of::<ListNode>())
+        .expect("heap: requested alignment is unreasonably large")
+        .pad_to_align();
+    let size = layout.size().max(size_of::<ListNode>());
+    (size, layout.align())
 }
 
 /// Newtype wrapping the allocator in a `spin::Mutex`. `GlobalAlloc`'s methods take
@@ -98,26 +183,24 @@ impl BumpHeap {
 /// and the newtype exists because the orphan rule forbids `impl GlobalAlloc for
 /// Mutex<…>` directly. Uncontended today (single core, never entered from an
 /// interrupt handler) — the M9 revisit, like the frame allocator and paging.
-pub struct LockedHeap(Mutex<BumpHeap>);
+pub struct LockedHeap(Mutex<FreeListHeap>);
 
 impl LockedHeap {
     const fn new() -> LockedHeap {
-        LockedHeap(Mutex::new(BumpHeap::new()))
+        LockedHeap(Mutex::new(FreeListHeap::new()))
     }
 }
 
 unsafe impl GlobalAlloc for LockedHeap {
-    // SAFETY: the returned pointer is `layout.align()`-aligned and points at
-    // `layout.size()` bytes inside the mapped heap region, or is null on failure —
-    // exactly the GlobalAlloc contract.
+    // SAFETY: returns a `layout.align()`-aligned pointer to `layout.size()` bytes
+    // inside the mapped heap, or null on failure — the GlobalAlloc contract.
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         self.0.lock().alloc(layout)
     }
 
-    // SAFETY: `ptr`/`layout` came from this allocator's `alloc` (the caller's
-    // contract); the bump allocator only counts down toward a full reset.
-    unsafe fn dealloc(&self, _ptr: *mut u8, _layout: Layout) {
-        self.0.lock().dealloc();
+    // SAFETY: `ptr`/`layout` came from this allocator's `alloc` (caller's contract).
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        self.0.lock().dealloc(ptr, layout)
     }
 }
 
@@ -142,7 +225,8 @@ pub fn init() {
     }
 
     // SAFETY: every page of [HEAP_BASE, HEAP_BASE + HEAP_SIZE) was just mapped
-    // writable onto a distinct frame above the identity map; nothing else owns it.
+    // writable onto a distinct frame above the identity map; nothing else owns it,
+    // and HEAP_BASE (1 GiB) is node-aligned.
     unsafe {
         ALLOCATOR.0.lock().init(HEAP_BASE as usize, HEAP_SIZE as usize);
     }
@@ -156,24 +240,67 @@ pub fn init() {
     crate::serial_println!("M8: kernel heap online");
 }
 
-/// Prove `alloc` works: a `Box`, and a `Vec` pushed past its initial capacity so
-/// it must reallocate *through* the allocator. (Step 2 adds the reclaim check.)
+/// Prove the allocator works over serial: `Box`, a `Vec` grown past its capacity,
+/// a `String`, a multi-page allocation, and — the honesty check — that a freed
+/// allocation's memory is reused, the one thing a bump allocator provably cannot
+/// do. The heap allocates within its pre-mapped region, so it must not touch the
+/// frame allocator at runtime; we assert that too.
 pub fn self_test() {
     use alloc::boxed::Box;
+    use alloc::string::String;
     use alloc::vec::Vec;
 
+    let frames_before = frame_allocator::free_frame_count();
+
+    // Box, Vec (grown past capacity -> real reallocation), String.
     let boxed = Box::new(0x00C0_FFEE_u64);
-    assert_eq!(*boxed, 0x00C0_FFEE, "heap: Box did not hold its value");
+    assert_eq!(*boxed, 0x00C0_FFEE, "heap: Box lost its value");
 
     let mut v = Vec::new();
     for i in 0..256u64 {
         v.push(i);
     }
+    assert_eq!(v.iter().sum::<u64>(), (0..256u64).sum(), "heap: Vec lost data");
+
+    let mut s = String::from("Ziran");
+    s.push_str(" OS heap");
+    assert_eq!(s, "Ziran OS heap", "heap: String corrupted");
+
+    // A single allocation spanning several pages, to prove the whole region is
+    // mapped, not just the first page.
+    let big: Vec<u64> = (0..2048u64).collect(); // 16 KiB across 4 pages
+    assert_eq!(big[2047], 2047, "heap: multi-page allocation not fully mapped");
+
+    crate::serial_println!("[ok] heap: Box, Vec (grown), String, and a 4-page Vec all allocate");
+
+    drop((boxed, v, s, big));
+
+    // The honesty check: allocate, free, allocate again -> the SAME address comes
+    // back. A bump allocator's cursor only advances; it would return a fresh,
+    // higher address and fail this. This is the reclaim proof, lifted from the
+    // frame allocator's self-test to the heap.
+    let addr1 = {
+        let x = Box::new(0u64);
+        &*x as *const u64 as usize
+    }; // x dropped here -> region freed
+    let addr2 = {
+        let y = Box::new(0u64);
+        &*y as *const u64 as usize
+    };
     assert_eq!(
-        v.iter().sum::<u64>(),
-        (0..256u64).sum(),
-        "heap: Vec lost data across its reallocations"
+        addr1, addr2,
+        "heap reclaim failed: a freed allocation was not reused by the next alloc"
+    );
+    crate::serial_println!(
+        "[ok] heap: freed {:#014x} and got the same address back (reclaim works)",
+        addr2
     );
 
-    crate::serial_println!("[ok] heap: Box and a Vec grown past capacity both allocate");
+    // The heap manages its pre-mapped region; runtime alloc/free must not consume
+    // physical frames.
+    assert_eq!(
+        frame_allocator::free_frame_count(),
+        frames_before,
+        "heap: runtime allocation should not touch the frame allocator"
+    );
 }
