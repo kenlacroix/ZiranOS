@@ -42,6 +42,17 @@ SECTIONS {
         *(.data .data.*)
     }
 
+    /* The GOT/PLT. Left implicit, the linker places these *orphan* sections after
+     * .data — i.e. after `data_end` below — so they fall outside the flat binary
+     * the Multiboot1/`-kernel` loader copies ([kernel_start, data_end)). Code
+     * dereferences GOT entries (e.g. inside core::fmt's argument thunks), so if the
+     * GOT isn't loaded those pointers read as garbage and the first such call jumps
+     * into the weeds (a #UD at a tiny address, then triple fault). GRUB's ELF loader
+     * covers them via the LOAD segment regardless; naming them here pulls them
+     * inside `data_end` so the flat path works too. */
+    .got  : { *(.got) *(.got.*) }
+    .got.plt : { *(.got.plt) }
+
     /* End of the initialized, file-backed image (everything before .bss, which is
      * zero-filled and not stored). The Multiboot1 header the browser emulator
      * uses points its `load_end_addr` here: the flat binary produced by `objcopy`

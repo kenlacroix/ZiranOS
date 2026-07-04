@@ -49,6 +49,13 @@ _start:
     call check_cpuid
     call check_long_mode
 
+    ; Enable SSE before any Rust runs. The x86_64-unknown-none target emits SSE
+    ; instructions (integer formatting, memcpy, ...). GRUB happens to leave SSE
+    ; enabled so the disk path works, but the Multiboot/`-kernel` handoff does not
+    ; — without this the first SSE op faults (#UD/#NM) and, with no IDT yet, triple
+    ; faults. See boot/boot.asm:enable_sse.
+    call enable_sse
+
     call set_up_page_tables
     call enable_paging
 
@@ -158,6 +165,20 @@ enable_paging:
     mov eax, cr0
     or eax, 1 << 31
     mov cr0, eax
+    ret
+
+; Turn on SSE so the compiled Rust (which the x86_64 target builds with SSE) can
+; run: clear CR0.EM (bit 2, no x87 emulation), set CR0.MP (bit 1), then set
+; CR4.OSFXSR (bit 9) and CR4.OSXMMEXCPT (bit 10). 32-bit protected mode is fine;
+; this runs before paging/long mode. Called from `_start`.
+enable_sse:
+    mov eax, cr0
+    and eax, 0xFFFFFFFB          ; clear CR0.EM
+    or  eax, 0x00000002          ; set CR0.MP
+    mov cr0, eax
+    mov eax, cr4
+    or  eax, 0x00000600          ; CR4.OSFXSR | CR4.OSXMMEXCPT
+    mov cr4, eax
     ret
 
 ; --- Error reporting ---------------------------------------------------------
