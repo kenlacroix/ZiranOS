@@ -86,10 +86,25 @@ on your terminal over the serial line.
 
 New here? Start with the plain-language explainers in
 [`docs/concepts/`](docs/concepts/) — e.g. [interrupts](docs/concepts/interrupts.md),
-written from first principles alongside the code. Or boot it in your browser and
-learn as it runs: the **[`web/`](web/) teaching tool** loads the real kernel in a
-PC emulator beside a guided predict → observe → explain tour (`make web`, then
-serve `web/`).
+written from first principles alongside the code. Or explore it in your browser:
+the **[`web/`](web/) teaching tool** walks a guided predict → observe → explain
+tour over milestones M0–M12 (with an ELI5 toggle for plain-language explanations,
+and the "why this exists / not AI slop" manifesto up front). It comes in three
+levels of realness, each labelled honestly:
+
+- **the tour** replays a *faithful reconstruction* — every line on that green
+  screen is exactly what the real kernel prints, character for character (a
+  64-bit kernel can't run in the lightweight browser emulators, so this is a
+  replay, not live);
+- **[a real recorded session](web/replay.html)** — the actual kernel captured
+  byte-for-byte over the serial line (`make console`), replayed with real timing;
+- **a genuine live boot** — real QEMU compiled to WebAssembly
+  (`web/build-qemu-wasm.sh`) booting the unmodified 64-bit ISO in the tab. This is
+  **built but not yet deployed** (verified-in-browser still pending), so its "Boot
+  the real kernel" button stays hidden for now.
+
+Hosting for all of the above is written up in [`docs/DEPLOY.md`](docs/DEPLOY.md)
+(Cloudflare Pages, with the big qemu-wasm assets on R2).
 
 | Range | State |
 |------|-------|
@@ -155,9 +170,10 @@ grub/grub.cfg           one-entry GRUB menu for the bootable ISO
 Makefile                the whole build/run/debug pipeline, spelled out
 .github/workflows/ci.yml build + headless boot smoke test on every push
 CLAUDE.md               the per-milestone workflow (adapted from gstack)
-web/                    the browser teaching tool (boots the real kernel + guided tour)
+web/                    browser teaching tool: guided tour + real-session replay + live boot (qemu-wasm)
 docs/concepts/          plain-language explainers, written to teach
 docs/blog/              the narrative, one post per milestone
+docs/DEPLOY.md          how the web tool is hosted (Cloudflare Pages + R2)
 docs/MILESTONE_CHECKLIST.md  the loop every milestone runs
 ```
 
