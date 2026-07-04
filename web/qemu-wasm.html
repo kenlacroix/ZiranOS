@@ -55,6 +55,9 @@
       // jumps to it. Skips SeaBIOS/GRUB/disk entirely: QEMU-WASM's block-device
       // read is unreliable, and GRUB only writes to VGA (invisible over serial).
       '-kernel', '/kernel-v86.bin',
+      '-nic', 'none',               // no network card — else QEMU loads efi-e1000.rom,
+                                    // which we trimmed from pc-bios (qemu-wasm ABORTS on a
+                                    // missing romfile; native only warns). We don't network.
       '-accel', 'tcg,tb-size=500',  // software emulation — the browser has no KVM
       '-no-reboot',
     ];
