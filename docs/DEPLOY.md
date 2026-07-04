@@ -77,9 +77,23 @@ visit with `?assets=https://host/path/`. Steps:
 6. Load it, confirm `crossOriginIsolated === true` in the console, and boot to
    `ziran:/>`.
 
-(Smaller-scale alternative: if the built `out.wasm` comes in **under 25 MiB**, skip
-R2 entirely — `npx wrangler pages deploy web` uploads the whole folder as a Direct
-Upload, assets included. Needs Node. We'll know the size when the build lands.)
+**Chosen path (the build landed under 25 MiB — no R2 needed).** The built
+`qemu-system-x86_64.wasm` is ~15.5 MiB and the live-boot page loads the kernel via
+`-kernel /kernel-v86.bin` (not the 16 MiB ISO), so every asset is under Pages'
+25 MiB per-file cap. Skip R2 and **direct-upload the whole `web/` folder** — which
+includes the gitignored assets a git-connected deploy can't see (that is exactly
+why `/qemu-wasm` renders text but never boots the kernel):
+
+```sh
+./web/build-qemu-wasm.sh        # once, to produce the assets (heavy; see that script)
+make deploy-web                 # = npx wrangler pages deploy web --project-name=ziranos
+```
+
+`make deploy-web` needs Node and a one-time `wrangler login`; override the project
+name with `CF_PAGES_PROJECT=yourname`. **Caveat:** a later `git push` to a
+git-connected Pages project redeploys *without* the assets (they're gitignored), so
+after any push you want live, re-run `make deploy-web` — or make Pages
+direct-upload-only so the two don't fight.
 
 ## Notes
 

@@ -127,6 +127,7 @@ enum Command<'a> {
     Cd(&'a str),
     Ls(&'a str),
     Cat(&'a str),
+    Load,
     Unknown(&'a str),
 }
 
@@ -155,6 +156,9 @@ fn parse(line: &str) -> Command<'_> {
         "cd" => Command::Cd(rest.split_whitespace().next().unwrap_or("")),
         "ls" => Command::Ls(rest.split_whitespace().next().unwrap_or("")),
         "cat" => Command::Cat(rest.split_whitespace().next().unwrap_or("")),
+        // `load` takes its (large) payload by streaming the console itself, not
+        // from this line — see `cmd_load`. Any tail here is ignored.
+        "load" => Command::Load,
         other => Command::Unknown(other),
     }
 }
@@ -175,6 +179,7 @@ fn dispatch(cwd: &mut String, line: &str) {
             shln!("  cd [path]     change directory (no arg -> /)");
             shln!("  ls [path]     list a directory (default: cwd)");
             shln!("  cat <path>    print a file");
+            shln!("  load          mount a base64 image pasted over the console");
         }
         Command::Echo(rest) => shln!("{rest}"),
         Command::Clear => crate::vga_buffer::clear_screen(),
@@ -184,6 +189,7 @@ fn dispatch(cwd: &mut String, line: &str) {
         Command::Cd(p) => cmd_cd(cwd, p),
         Command::Ls(p) => cmd_ls(cwd, p),
         Command::Cat(p) => cmd_cat(cwd, p),
+        Command::Load => cmd_load(),
         Command::Unknown(verb) => shln!("unknown command: {verb} (try help)"),
     }
 }
@@ -258,7 +264,7 @@ fn cmd_cd(cwd: &mut String, arg: &str) {
         return;
     }
     let target = canonicalize(cwd, arg);
-    let image = crate::fs::boot_image();
+    let image = active_image();
     let fs = match crate::fs::Fs::mount(&image) {
         Ok(fs) => fs,
         Err(e) => {
@@ -278,7 +284,7 @@ fn cmd_cd(cwd: &mut String, arg: &str) {
 /// and stateless, so there is nothing to cache).
 fn cmd_ls(cwd: &str, arg: &str) {
     let target = if arg.is_empty() { cwd.into() } else { canonicalize(cwd, arg) };
-    let image = crate::fs::boot_image();
+    let image = active_image();
     let fs = match crate::fs::Fs::mount(&image) {
         Ok(fs) => fs,
         Err(e) => {
@@ -309,7 +315,7 @@ fn cmd_cat(cwd: &str, arg: &str) {
         return;
     }
     let target = canonicalize(cwd, arg);
-    let image = crate::fs::boot_image();
+    let image = active_image();
     let fs = match crate::fs::Fs::mount(&image) {
         Ok(fs) => fs,
         Err(e) => {
@@ -322,6 +328,190 @@ fn cmd_cat(cwd: &str, arg: &str) {
         Err(crate::fs::FsError::IsADirectory) => shln!("cat: is a directory: {target}"),
         Err(_) => shln!("no such file: {target}"),
     }
+}
+
+// ---------------------------------------------------------------------------
+// `load` — mount a user-supplied image (Milestone 16, Tier-1 CTF delivery).
+//
+// Lets a visitor paste a *crafted* filesystem image and then drive `ls`/`cat`
+// over it. The exploit that makes this a challenge lives one layer down: the
+// player controls the whole image including the superblock, so they can forge
+// `data_end = total_size` and alias a file's extent over bytes with no directory
+// entry — the documented weakness in `Fs::mount` ("validating against a value the
+// caller controls is not validation"). This command is only the delivery vehicle;
+// it mounts through the real, strict reader, exactly like the boot disk.
+// ---------------------------------------------------------------------------
+
+/// The image the FS commands operate on. `None` until a successful `load`, after
+/// which `ls`/`cat`/`cd` see the uploaded image instead of the built-in boot disk.
+/// Only the shell task ever touches this, and no interrupt handler reaches it, so
+/// the spinlock never contends — it is here to make the shared-state borrow plainly
+/// sound, not to arbitrate a race.
+static LOADED: spin::Mutex<Option<Vec<u8>>> = spin::Mutex::new(None);
+
+/// Largest image `load` accepts (decoded). A hostile paste is stopped the instant
+/// it crosses this, *before* any mount, so an enormous declared `total_size` cannot
+/// be used to exhaust the heap.
+const MAX_IMAGE: usize = 64 * 1024;
+
+/// The bytes the FS commands should mount right now: the uploaded image if one has
+/// been `load`ed, else the built-in boot disk. Returns an owned copy so the caller
+/// mounts a local slice — the same "mount fresh each command" discipline `ls`/`cat`
+/// already use (the image is small and capped, so the clone is cheap).
+fn active_image() -> Vec<u8> {
+    match &*LOADED.lock() {
+        Some(img) => img.clone(),
+        None => crate::fs::boot_image(),
+    }
+}
+
+/// Why a base64 payload was rejected — distinct so `load` can name the fault, the
+/// way the FS reports a specific `FsError`.
+#[derive(PartialEq, Eq, Debug)]
+enum B64Error {
+    /// A byte outside the standard alphabet (after whitespace was stripped).
+    InvalidChar,
+    /// The alphabet-only length is not a multiple of 4, or `=` padding is malformed.
+    BadLength,
+}
+
+/// Standard base64 symbol -> its 6-bit value; `None` for `=` and any non-symbol.
+fn b64_val(c: u8) -> Option<u8> {
+    match c {
+        b'A'..=b'Z' => Some(c - b'A'),
+        b'a'..=b'z' => Some(c - b'a' + 26),
+        b'0'..=b'9' => Some(c - b'0' + 52),
+        b'+' => Some(62),
+        b'/' => Some(63),
+        _ => None,
+    }
+}
+
+/// Decode standard base64 (with `=` padding) to raw bytes. Input must already be
+/// alphabet+`=` only — `load` strips whitespace as it reads. Total and panic-free:
+/// every malformed length, misplaced pad, or stray byte returns a `B64Error`, never
+/// a panic — the same discipline the FS `mount` boundary holds, because this too
+/// parses fully hostile input.
+fn b64_decode(input: &[u8]) -> Result<Vec<u8>, B64Error> {
+    if input.len() % 4 != 0 {
+        return Err(B64Error::BadLength);
+    }
+    let chunks = input.len() / 4;
+    let mut out = Vec::with_capacity(chunks * 3);
+    for (i, chunk) in input.chunks_exact(4).enumerate() {
+        let last = i + 1 == chunks;
+        let mut vals = [0u8; 4];
+        let mut pad = 0usize;
+        for (j, &c) in chunk.iter().enumerate() {
+            if c == b'=' {
+                // `=` is legal only as trailing padding in the final chunk (the
+                // last one or two positions).
+                if !last || j < 2 {
+                    return Err(B64Error::BadLength);
+                }
+                pad += 1;
+            } else {
+                // A real symbol after a pad byte means the pad wasn't trailing.
+                if pad != 0 {
+                    return Err(B64Error::BadLength);
+                }
+                vals[j] = b64_val(c).ok_or(B64Error::InvalidChar)?;
+            }
+        }
+        let triple = (vals[0] as u32) << 18
+            | (vals[1] as u32) << 12
+            | (vals[2] as u32) << 6
+            | (vals[3] as u32);
+        out.push((triple >> 16) as u8); //   pad 0,1,2 -> always the first byte
+        if pad < 2 {
+            out.push((triple >> 8) as u8); // pad 0,1   -> a second byte
+        }
+        if pad < 1 {
+            out.push(triple as u8); //        pad 0     -> a third byte
+        }
+    }
+    Ok(out)
+}
+
+/// Encode bytes as standard base64. Used only by the self-test to round-trip a real
+/// image back through [`b64_decode`].
+fn b64_encode(input: &[u8]) -> Vec<u8> {
+    const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = Vec::with_capacity((input.len() + 2) / 3 * 4);
+    for chunk in input.chunks(3) {
+        let n = (chunk[0] as u32) << 16
+            | (*chunk.get(1).unwrap_or(&0) as u32) << 8
+            | (*chunk.get(2).unwrap_or(&0) as u32);
+        out.push(A[(n >> 18 & 63) as usize]);
+        out.push(A[(n >> 12 & 63) as usize]);
+        out.push(if chunk.len() > 1 { A[(n >> 6 & 63) as usize] } else { b'=' });
+        out.push(if chunk.len() > 2 { A[(n & 63) as usize] } else { b'=' });
+    }
+    out
+}
+
+/// `load` — replace the active disk with a base64 image pasted over the console.
+/// The line editor caps a line at `LINE_MAX` (128) bytes, far smaller than an
+/// image, so `load` takes over the read loop itself: it streams bytes straight from
+/// the same keyboard/serial sources, keeping base64 symbols, skipping whitespace,
+/// and stopping at a `.` sentinel (a period never appears in base64). The payload
+/// is size-capped *as it arrives*, decoded, then validated by the real `Fs::mount`
+/// before it is trusted — a bad image is rejected with its `FsError` and the
+/// previous image is left untouched.
+fn cmd_load() {
+    shln!("load: paste a base64 filesystem image, then a line with a single '.'");
+
+    // Base64 expands 3 bytes to 4, so cap the encoded stream a little above the
+    // decoded ceiling; a payload past it is drained (not stored) until the sentinel.
+    let b64_cap = MAX_IMAGE / 3 * 4 + 4;
+    let mut payload: Vec<u8> = Vec::new();
+    let mut overflowed = false;
+    loop {
+        match keyboard::pop().or_else(crate::serial::read_byte) {
+            Some(b'.') => break, // sentinel — end of image
+            Some(b) if b.is_ascii_whitespace() => {} // layout only; ignore
+            Some(b) => {
+                if payload.len() >= b64_cap {
+                    overflowed = true; // keep reading to the '.', but stop storing
+                } else {
+                    payload.push(b);
+                }
+            }
+            // Busy-poll rather than `hlt`: a fast paste over the UART's ~16-byte FIFO
+            // would overflow if we only woke on the 100 Hz tick. `load` is a short
+            // burst, so draining continuously is worth the spin.
+            None => core::hint::spin_loop(),
+        }
+    }
+
+    if overflowed {
+        shln!("load: image too large (max {MAX_IMAGE} bytes)");
+        return;
+    }
+    let bytes = match b64_decode(&payload) {
+        Ok(b) => b,
+        Err(e) => {
+            shln!("load: invalid base64 ({e:?})");
+            return;
+        }
+    };
+    if bytes.is_empty() {
+        shln!("load: empty image (nothing pasted)");
+        return;
+    }
+    if bytes.len() > MAX_IMAGE {
+        shln!("load: image too large (max {MAX_IMAGE} bytes)");
+        return;
+    }
+    // Validate through the *real* reader before trusting it — never store an image
+    // that would make the FS commands fail to mount.
+    if let Err(e) = crate::fs::Fs::mount(&bytes) {
+        shln!("load: not a valid image: {e:?}");
+        return;
+    }
+    let n = bytes.len();
+    *LOADED.lock() = Some(bytes);
+    shln!("load: mounted {n}-byte image (ls / cat / cd now read it)");
 }
 
 /// The shell task entry point. Spawned onto the scheduler by `kernel_main`; runs
@@ -436,7 +626,33 @@ pub fn self_test() {
     assert_eq!(canonicalize("/", "//x//"), "/x"); // empty components dropped
     assert_eq!(parse("echo hello  world"), Command::Echo("hello  world"));
     assert_eq!(parse("echo"), Command::Echo(""));
+    assert_eq!(parse("load"), Command::Load);
+    assert_eq!(parse("load ignored tail"), Command::Load); // tail is streamed, not parsed
     assert_eq!(parse("bogus xyz"), Command::Unknown("bogus"));
+
+    // base64 (the `load` payload codec): known vectors incl. every padding case,
+    // and clean rejection of malformed input — never a panic, mirroring the FS
+    // mount boundary since this too decodes hostile bytes.
+    assert_eq!(b64_decode(b"").unwrap(), b"");
+    assert_eq!(b64_decode(b"TWFu").unwrap(), b"Man"); // no padding
+    assert_eq!(b64_decode(b"TWE=").unwrap(), b"Ma"); //  one pad
+    assert_eq!(b64_decode(b"TQ==").unwrap(), b"M"); //   two pads
+    assert_eq!(b64_decode(b"aGVsbG8=").unwrap(), b"hello");
+    assert_eq!(b64_decode(b"ABC"), Err(B64Error::BadLength)); //   not a multiple of 4
+    assert_eq!(b64_decode(b"=AAA"), Err(B64Error::BadLength)); //  pad not trailing
+    assert_eq!(b64_decode(b"TW=u"), Err(B64Error::BadLength)); //  symbol after a pad
+    assert_eq!(b64_decode(b"A!==").err(), Some(B64Error::InvalidChar)); // stray byte
+    // Round-trip a *real* image through encode -> decode and confirm it still mounts
+    // — this is exactly the path `load` drives.
+    let img = crate::fs::boot_image();
+    let round = b64_decode(&b64_encode(&img)).unwrap();
+    assert_eq!(round, img, "shell: base64 round-trip corrupted a real image");
+    assert!(
+        crate::fs::Fs::mount(&round).is_ok(),
+        "shell: round-tripped image won't mount"
+    );
+    // With nothing loaded, the FS commands see the boot disk.
+    assert_eq!(active_image(), img, "shell: active_image should default to the boot disk");
 
     // The input ring (the milestone's crux) round-trips FIFO. Guard with
     // interrupts off so the real keyboard IRQ — the only other producer — cannot
