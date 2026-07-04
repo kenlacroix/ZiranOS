@@ -77,7 +77,7 @@ endif
 # reached long mode (Milestone 2); MILESTONE_MARKER proves the current milestone's
 # subsystem came up. Both must appear in the captured serial output for a pass.
 BOOT_MARKER      := Ziran OS booted
-MILESTONE_MARKER := M10: shell task online
+MILESTONE_MARKER := M10: shell online
 
 CARGO_FLAGS := --release
 ifeq ($(PROFILE),debug)

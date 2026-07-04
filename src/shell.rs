@@ -140,10 +140,33 @@ fn dispatch(line: &str) {
         }
         Command::Echo(rest) => println!("{rest}"),
         Command::Clear => crate::vga_buffer::clear_screen(),
-        // mem/ps read live kernel state; wired up in step 3.
-        Command::Mem => println!("(mem: coming in the next step)"),
-        Command::Ps => println!("(ps: coming in the next step)"),
+        Command::Mem => cmd_mem(),
+        Command::Ps => cmd_ps(),
         Command::Unknown(verb) => println!("unknown command: {verb} (try help)"),
+    }
+}
+
+/// `mem` — live physical-frame and heap usage, plus uptime from the timer.
+fn cmd_mem() {
+    let free_frames = crate::frame_allocator::free_frame_count();
+    let (heap_used, heap_free) = crate::heap::stats();
+    let ticks = crate::pit::ticks();
+    println!("memory:");
+    println!("  frames: {free_frames} free ({} MiB)", free_frames / 256);
+    println!(
+        "  heap:   {heap_used} used / {heap_free} free / {} total bytes",
+        crate::heap::HEAP_SIZE
+    );
+    println!("  uptime: {} s ({ticks} ticks @ 100 Hz)", ticks / 100);
+}
+
+/// `ps` — the scheduler's task list: id, state, and which one is current.
+fn cmd_ps() {
+    let tasks = crate::task::snapshot();
+    println!("tasks: {}", tasks.len());
+    for (id, state, current) in tasks {
+        let marker = if current { "  (current)" } else { "" };
+        println!("  [{id}] {}{marker}", state.name());
     }
 }
 
@@ -155,9 +178,9 @@ pub extern "C" fn shell_main() {
     // below would wedge forever and no keystroke IRQ could ever wake us.
     interrupts::enable();
 
-    serial_println!("M10: shell task online");
+    serial_println!("M10: shell online");
     println!();
-    println!("Ziran OS shell. (commands arrive in the next step -- for now it echoes.)");
+    println!("Ziran OS shell -- type `help` for commands.");
     print!("{PROMPT}");
 
     let mut line = Line::new();
@@ -234,5 +257,29 @@ pub fn self_test() {
     assert_eq!(keyboard::pop(), None, "shell: input ring should be drained");
     interrupts::restore(flags);
 
-    serial_println!("[ok] shell: line editing, command parsing, and input ring verified");
+    // The data accessors behind `ps`/`mem` return sane, live values (asserted here
+    // on serial; the formatted commands print to VGA and are checked by hand).
+    let tasks = crate::task::snapshot();
+    assert!(!tasks.is_empty(), "shell: task snapshot empty");
+    assert!(
+        tasks.iter().any(|&(id, _, _)| id == 0),
+        "shell: idle task (id 0) missing from ps"
+    );
+    let (used, free) = crate::heap::stats();
+    assert!(
+        free > 0 && free <= crate::heap::HEAP_SIZE as usize,
+        "shell: heap free out of range"
+    );
+    assert!(used < crate::heap::HEAP_SIZE as usize, "shell: heap fully used?");
+    assert!(
+        crate::frame_allocator::free_frame_count() > 0,
+        "shell: no free frames"
+    );
+
+    serial_println!(
+        "[ok] shell: editing, parsing, input ring, and ps/mem accessors verified \
+         (tasks={}, heap_free={})",
+        tasks.len(),
+        free
+    );
 }

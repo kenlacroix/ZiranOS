@@ -54,10 +54,21 @@ const STACK_SIZE: usize = 16 * 1024;
 const IDLE: usize = 0;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum State {
+pub enum State {
     Ready,
     Running,
     Finished,
+}
+
+impl State {
+    /// A short lowercase name, for `ps`.
+    pub fn name(self) -> &'static str {
+        match self {
+            State::Ready => "ready",
+            State::Running => "running",
+            State::Finished => "finished",
+        }
+    }
 }
 
 /// A schedulable task: its own stack, and the parked stack pointer that *is* its
@@ -175,6 +186,28 @@ pub fn spawn(entry: extern "C" fn()) -> u64 {
     };
     interrupts::restore(flags);
     id
+}
+
+/// A read-only snapshot of the scheduler for the shell's `ps`: `(id, state,
+/// is_current)` per task. Taken under the interrupt-safe discipline — clear IF,
+/// lock, copy into a `Vec`, unlock, restore — so the caller prints it *after* the
+/// lock is released. Printing while holding `SCHED` would let the 100 Hz timer's
+/// `preempt` deadlock on the lock. Allocating the `Vec` under the lock is fine:
+/// the heap lock is independent of `SCHED`.
+pub fn snapshot() -> Vec<(u64, State, bool)> {
+    let flags = interrupts::save_and_disable();
+    let snap = {
+        let guard = SCHED.lock();
+        let sched = guard.as_ref().expect("task::snapshot before init");
+        sched
+            .tasks
+            .iter()
+            .enumerate()
+            .map(|(i, t)| (t.id, t.state, i == sched.current))
+            .collect()
+    };
+    interrupts::restore(flags);
+    snap
 }
 
 /// Hand the CPU to the next runnable task. Picks the next ready task (falling

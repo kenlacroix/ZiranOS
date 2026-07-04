@@ -218,6 +218,27 @@ unsafe impl GlobalAlloc for LockedHeap {
 #[global_allocator]
 static ALLOCATOR: LockedHeap = LockedHeap::new();
 
+/// Live heap usage for the shell's `mem` command: `(used_bytes, free_bytes)` over
+/// the fixed `HEAP_SIZE` region. Walks the free list summing free regions, then
+/// returns so the caller prints *after* the lock is released. Interrupt-guarded so
+/// a timer preempt cannot strand the brief heap-lock hold. Allocates nothing.
+pub fn stats() -> (usize, usize) {
+    let flags = crate::interrupts::save_and_disable();
+    let free = {
+        let guard = ALLOCATOR.0.lock();
+        let mut total = 0usize;
+        let mut cur = guard.head.next.as_deref();
+        while let Some(node) = cur {
+            total += node.size;
+            cur = node.next.as_deref();
+        }
+        total
+    };
+    crate::interrupts::restore(flags);
+    let used = (HEAP_SIZE as usize).saturating_sub(free);
+    (used, free)
+}
+
 /// Reserve the heap's virtual region, eagerly map every page onto a fresh frame,
 /// and hand the region to the allocator. Call once from `kernel_main`, after
 /// `paging::init()` (it maps through the kernel's own tables) and before any
