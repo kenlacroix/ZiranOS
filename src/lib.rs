@@ -146,15 +146,14 @@ pub extern "C" fn kernel_main(multiboot_info_addr: u64) -> ! {
     heap::self_test();
     println!("[ok] heap: dynamic allocation (Vec, Box, String) now works");
 
-    // Milestone 9 (commit 1): prove the cooperative context switch in isolation,
-    // before any scheduler or timer exists. Create one task on a fresh heap
-    // stack, switch into it, let it print, and have it switch straight back — a
-    // round-trip that exercises switch_context in both directions. Runs while
-    // interrupts are still masked. The fabricated stack's 16-byte alignment is
-    // the thing most likely to triple-fault, so this step is verified under GDB
-    // (see docs/planning/milestone-09-eng-plan.md).
-    task::demo_roundtrip();
-    println!("[ok] task: context switch round-trips (Milestone 9 groundwork)");
+    // Milestone 9 (cooperative half): stand up the round-robin scheduler on the
+    // heap and prove it. Two worker tasks alternate by voluntarily yielding; the
+    // self-test asserts their output is a clean "ABAB..." and that each task's
+    // registers and heap state survive every switch. Runs while interrupts are
+    // still masked — this half needs no timer. See src/task.rs and
+    // docs/planning/milestone-09-eng-plan.md.
+    task::cooperative_self_test();
+    println!("[ok] scheduler: two tasks cooperatively multitask (Milestone 9)");
 
     // Milestone 5: bring up the keyboard. Remap + mask the PIC first, THEN
     // enable hardware interrupts — doing it in the other order could let a stray

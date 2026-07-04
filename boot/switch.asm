@@ -12,6 +12,8 @@
 ; ours, with no compiler-inserted spills to reason about. It links via `extern
 ; "C"` exactly like the ISR stubs.
 
+extern task_exit               ; Rust: retire the current task, never returns
+
 global switch_context
 global task_trampoline
 
@@ -63,14 +65,20 @@ switch_context:
 ; entry fn is `fn() -> !`; if it ever returned there is nothing valid below it,
 ; so we trap on a halt loop rather than execute a bogus `ret`.
 ;
+; When the entry fn *returns* (worker tasks are bounded, so they do), we must not
+; `ret` -- there is nothing valid below the fabricated frame. Instead we fall into
+; `task_exit`, which marks this task Finished and yields to the next runnable one,
+; never coming back. The halt loop is an unreachable safety net.
+;
 ; NOTE (Milestone 9b): preemption will add an `sti` as the first instruction
 ; here, so a task bootstrapped via `ret` (which, unlike `iretq`, does not restore
 ; the interrupt flag) runs with interrupts enabled and can be preempted. It is
-; deliberately omitted now: commit 1 runs this round-trip while interrupts are
+; deliberately omitted now: the cooperative self-test runs while interrupts are
 ; still masked, before the PIC is configured, so enabling them here would be
 ; premature.
 task_trampoline:
     call r15           ; r15 was fabricated to hold the entry fn pointer
+    call task_exit     ; the body returned: retire this task; does not return
 .hang:
     cli
     hlt
