@@ -206,6 +206,9 @@
   ol.road li:last-child{border-bottom:none}
   ol.road li .n{font-family:var(--font-mono);font-size:12px;color:var(--accent);width:26px;flex:none}
   ol.road li .st{margin-left:auto;font-family:var(--font-mono);font-size:11px;padding:2px 8px;border-radius:999px;flex:none}
+  ol.road li.jump{cursor:pointer;margin:0 -8px;padding-left:8px;padding-right:8px;border-radius:7px;transition:background .12s}
+  ol.road li.jump:hover,ol.road li.jump:focus-visible{background:var(--accent-ghost);outline:none}
+  ol.road li.jump:hover .n{color:var(--accent-2)}
   .st.done{background:#3f9e6b22;color:#3f9e6b}
   .st.now{background:var(--accent-ghost);color:var(--accent)}
   .st.todo{background:var(--surface-2);color:var(--ink-soft)}
@@ -303,6 +306,15 @@
   .evidence .ev{font-weight:700;flex:none}
   .evidence .ev.v{color:#3f9e6b}
   .evidence .ev.c{color:var(--accent)}
+  /* the hint that opening the prediction unlocks the explanation below */
+  .reveal-hint{display:block;margin-top:12px;font-family:var(--font-mono);font-size:11.5px;
+    color:var(--accent);letter-spacing:.02em}
+  /* register/state peek: the concrete value behind an abstraction (PLAN §3b) */
+  .peek{margin:14px 0 0;display:flex;flex-direction:column;gap:5px}
+  .peek .pk-badge{font-family:var(--font-mono);font-size:11px;font-weight:700;letter-spacing:.1em;
+    text-transform:uppercase;color:var(--accent-2)}
+  .peek code{font-family:var(--font-mono);font-size:12.5px;color:var(--phosphor);background:var(--screen);
+    border:1px solid var(--line);border-radius:8px;padding:9px 12px;line-height:1.5;overflow-x:auto}
 
   /* ---- ELI5: an opt-in plain-language lens over the tour ---- */
   .tour-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:2px}
@@ -414,7 +426,7 @@
     </div>
 
     <!-- GUIDED TOUR -->
-    <div class="tour">
+    <div class="tour" id="tour">
       <div class="tour-head">
         <h2>Guided tour</h2>
         <button class="eli5-toggle" id="eli5toggle" type="button" role="switch" aria-checked="false" aria-label="Explain like I’m 5 — plain-language mode">
@@ -593,7 +605,10 @@ make debug      # boot frozen, attach GDB</code>
   "use strict";
   // ---- where the real files live (edit if you fork/deploy elsewhere) ----
   var REPO = "https://github.com/kenlacroix/ZiranOS";
-  var BRANCH = "claude/ziran-os-plan-qgobid";
+  // "HEAD" always resolves to the repo's default branch on GitHub, so every
+  // source link survives the branch being renamed or merged — no dead links,
+  // which is load-bearing for the "every claim links to real code" promise.
+  var BRANCH = "HEAD";
   var BLOB = REPO + "/blob/" + BRANCH + "/";
   // v86 assets — served locally in the repo build, or from a CDN as fallback.
   // (Named ASSET, not V86, so it never shadows the global V86 constructor.)
@@ -722,6 +737,7 @@ make debug      # boot frozen, attach GDB</code>
      a:"No. Physical memory is a patchwork: real RAM, firmware-reserved regions, memory-mapped devices, and plain holes, all interleaved. The kernel can’t safely probe it — reading a device register has side effects. So the bootloader (GRUB), which surveyed the machine before our code ran, hands over a map, and the kernel manages only the parts marked usable.",
      ex:"<p>Usable RAM is chopped into 4 KiB <em>frames</em>, and a <em>bitmap allocator</em> tracks each one with a single bit — free or used. It hands a frame out, takes it back, and — the part that makes it a real allocator and not a counter — returns the <em>same</em> frame on the next request after you free it. It carefully reserves the frames it must never give away: frame 0 (null), the kernel’s own image, and the boot structure itself. This is the bottom of the memory stack; paging and the heap are built directly on it.</p>",
      lesson:"The line between a counter and an allocator is reuse: anyone can hand out the next thing; the real work is taking it back and handing that same thing out again.",
+     peek:"121 MiB usable = 30,976 free 4 KiB frames — the bitmap's running count of real RAM",
      proof:"a freed frame is handed straight back out on the next request — the self-test frees a frame and asserts the very same one is reused, not leaked.",
      links:[["src/frame_allocator.rs","frame_allocator.rs"],["src/multiboot.rs","multiboot.rs"],["docs/concepts/physical-memory.md","physical-memory.md (explainer)"]]},
     {n:"07", ms:"Milestone 7 · paging", title:"Building its own map of memory",
@@ -740,6 +756,7 @@ make debug      # boot frozen, attach GDB</code>
      a:"Room to allocate memory whose size isn’t known until the program runs. Before this, everything lived on the stack or in static storage — fixed at compile time. A heap is a pool the kernel can carve up on demand, so data structures can grow: a Vec that keeps appending, a String built up character by character, a Box that puts one value on the heap. All of them ask the same allocator for space.",
      ex:"<p>The kernel reserves a 1 MiB window of virtual address space at 1 GiB, maps its pages onto real frames (this is paging and the frame allocator from the last two milestones doing exactly what they were built for), and installs a linked-list free-list allocator as Rust’s <code>#[global_allocator]</code>. Once that’s in place, the <code>alloc</code> crate lights up and <code>Vec</code>, <code>Box</code>, and <code>String</code> work — with no operating system underneath, because <em>we are</em> the thing they’d normally call.</p><p>The honesty is in reclaim. A bump allocator that only ever hands out the next byte is easy — but it leaks: free something and the space is gone forever. A real allocator takes freed memory back and reuses it, which the self-test proves by allocating, freeing, and watching the same space get handed out again. That difference — reusing freed memory, not just leaking it — is what makes this an allocator and not a counter.</p>",
      lesson:"Growable memory is a bookkeeping trick, not new hardware: the heap is just pages the kernel mapped, carved up by an allocator it wrote — and reclaim is the whole game.",
+     peek:"free → re-alloc returns 0x40000ff0 — byte-for-byte the same address, reclaim not leak",
      proof:"free an allocation, allocate again, and the SAME address (0x40000ff0) comes back — reclaim working, not a leak.",
      links:[["src/heap.rs","heap.rs"],["docs/concepts/heap.md","heap.md (explainer)"],["src/paging.rs","paging.rs"]]},
     {n:"09", ms:"Milestone 9 · timer + scheduling", title:"Running more than one thing at once",
@@ -749,6 +766,7 @@ make debug      # boot frozen, attach GDB</code>
      a:"It doesn’t truly run them together. It runs one for a slice, then swaps to the other and back, fast enough to look simultaneous. The saved state is the whole trick: a task is just a saved stack pointer, so switching means storing the outgoing task’s stack pointer and its six callee-saved registers, loading the incoming task’s, and returning — which resumes exactly where that task last stopped. And the switch can be forced by a timer interrupt, so a task doesn’t even have to cooperate to be switched away from.",
      ex:"<p>There are two halves to this. First the <em>cooperative</em> version: each task runs until it voluntarily calls <code>yield_now</code>, which hands the CPU to the next one. Two workers taking turns produce a clean <code>ABABAB…</code> — proof they interleave, and that each one’s registers and heap values survive the switch untouched. But cooperation is fragile: a single task that never yields would freeze everything.</p><p>So the second half is <em>preemptive</em>: a Programmable Interval Timer (the PIT) is set to fire 100 times a second, and each tick’s interrupt runs the very same <code>switch_context</code> the task would have called itself. Now a task is interleaved whether it cooperates or not. The honest proof is a task that spins in an infinite loop with <em>no</em> yield at all — it still makes progress, and another task still runs, <em>only</em> because the timer keeps forcibly taking the CPU away from it. That single fact — progress without cooperation — is the difference between a scheduler and a polite convention.</p><details class='breakit'><summary>Break it: what if the timer handler forgets the EOI?</summary><div class='bd'><p>The <em>EOI</em> (end-of-interrupt) is the one line that tells the PIC “this tick is handled — send me the next one.” Comment out <code>pic::send_eoi(0)</code> in the timer handler, rebuild, and boot. Predict what changes before you open this.</p><pre>with the EOI:     preemption works … (<b>91</b> ticks elapsed)\nwithout the EOI:  preemption works … (<span class='dead'><b>1</b> tick elapsed — the clock died</span>)</pre><p>Without the acknowledgement, the PIC keeps IRQ0’s “in-service” bit set, waiting forever for a signal that never comes — so it delivers <em>exactly one</em> timer interrupt, then goes silent. This little self-test still limps to a pass, because its second task only needed a single nudge to finish — but the tick counter frozen at <code>1</code> is the tell. A workload that needs the timer to <em>keep</em> interrupting — two tasks in genuinely endless loops — freezes right after that first tick: no crash, no message, just a hang. It is the most common first-timer bug, and it is why the real handler sends the EOI <em>before</em> it switches tasks (<code>src/interrupts.rs</code>).</p></div></details>",
      lesson:"A task is nothing but a saved stack pointer — “multitasking” is just swapping which stack the CPU returns into, and preemption is that same swap forced by a timer a task can’t refuse.",
+     peek:"a whole task in one register: saved rsp = 0x40008ff0 — 16-byte aligned, as the ABI demands",
      proof:"two tasks that never yield still interleave — a task spinning in an infinite loop is forced off the CPU by the timer (95 ticks elapsed).",
      caught:"a deadlock that only fires when the timer preempts a task mid-lock — the scheduler lock re-entered from inside the timer interrupt.",
      links:[["src/task.rs","task.rs"],["src/pit.rs","pit.rs"],["boot/switch.asm","switch.asm"],["docs/concepts/timer-and-scheduling.md","timer-and-scheduling.md (explainer)"]]},
@@ -790,18 +808,20 @@ make debug      # boot frozen, attach GDB</code>
      links:[["STATUS.md","the milestone tracker"],["docs/blog","the build log"]]}
   ];
 
+  // 4th field = the tour step (index into STEPS) this row jumps to, so the
+  // roadmap doubles as a clickable "you are here" spine tied to the tour.
   var ROAD = [
-    ["0–3","Boot, long mode, VGA text","done"],
-    ["4","Interrupts / exceptions","done"],
-    ["5","Keyboard input","done"],
-    ["6","Physical memory","done"],
-    ["7","Paging / virtual memory","done"],
-    ["8","Heap (Vec, Box, String)","done"],
-    ["9","Timer + scheduling","done"],
-    ["10","A shell","done"],
-    ["11","Filesystem","done"],
-    ["12","File manager (the goal)","done"],
-    ["13","Userspace / ring 3 / syscalls","now"]
+    ["0–3","Boot, long mode, VGA text","done",0],
+    ["4","Interrupts / exceptions","done",3],
+    ["5","Keyboard input","done",4],
+    ["6","Physical memory","done",5],
+    ["7","Paging / virtual memory","done",6],
+    ["8","Heap (Vec, Box, String)","done",7],
+    ["9","Timer + scheduling","done",8],
+    ["10","A shell","done",9],
+    ["11","Filesystem","done",10],
+    ["12","File manager (the goal)","done",11],
+    ["13","Userspace / ring 3 / syscalls","now",12]
   ];
 
   // ---------- helpers ----------
@@ -853,23 +873,40 @@ make debug      # boot frozen, attach GDB</code>
         (s.caught ? '<div class="ev-line"><span class="ev c">⚑ review caught</span><span>'+esc(s.caught)+'</span></div>' : '')+
         '</div>';
     }
+    var peekHtml = s.peek
+      ? '<div class="peek"><span class="pk-badge">the concrete value</span><code>'+esc(s.peek)+'</code></div>'
+      : '';
+    // predict -> observe -> EXPLAIN: the explanation, lesson, peek and proof stay
+    // hidden until the reader opens the prediction, so they have to guess first
+    // (PLAN §3a "the learner does the thinking first"). Gated, not just below-fold.
     $("card").innerHTML =
       '<div class="step-n">STEP '+s.n+'</div>'+
       '<div class="ms">'+esc(s.ms)+'</div>'+
       '<h3>'+esc(s.title)+'</h3>'+
       eli5Html+
       '<div class="watch"><b>Watch for</b>'+esc(s.watch)+'</div>'+
-      '<details class="predict"><summary>Predict: '+esc(s.q)+'</summary><div class="ans">'+esc(s.a)+'</div></details>'+
-      '<div class="explain">'+s.ex+'</div>'+
-      lessonHtml+
-      evidenceHtml+
+      '<details class="predict" id="predict"><summary>Predict: '+esc(s.q)+'</summary>'+
+        '<div class="ans">'+esc(s.a)+'<span class="reveal-hint">↓ the explanation, the lesson, and the on-boot proof unlock below</span></div></details>'+
+      '<div class="reveal" id="reveal" hidden>'+
+        '<div class="explain">'+s.ex+'</div>'+
+        lessonHtml+
+        peekHtml+
+        evidenceHtml+
+      '</div>'+
       '<div class="links">'+links+'</div>';
+    var pred=$("predict"), rev=$("reveal");
+    if(pred&&rev){ pred.addEventListener("toggle",function(){ if(pred.open) rev.hidden=false; }); }
     $("prev").disabled = idx===0;
     $("next").textContent = idx===STEPS.length-1 ? "Start over ↺" : "Next →";
     renderProgress();
   }
-  $("prev").addEventListener("click",function(){ if(idx>0){idx--;renderStep();window.scrollTo({top:0,behavior:"smooth"});} });
-  $("next").addEventListener("click",function(){ idx = idx===STEPS.length-1?0:idx+1; renderStep(); if(idx===0)window.scrollTo({top:0,behavior:"smooth"}); });
+  // reflect the current step in the URL so every step is deep-linkable — a blog
+  // post can point a reader straight at #step-09 and it survives a reload.
+  function writeHash(){ try{ history.replaceState(null,"","#step-"+STEPS[idx].n); }catch(e){} }
+  function scrollTour(){ var t=$("tour"); if(t){ t.scrollIntoView({behavior:"smooth",block:"start"}); } else { window.scrollTo({top:0,behavior:"smooth"}); } }
+  function navTo(i, scroll){ idx=(i+STEPS.length)%STEPS.length; renderStep(); writeHash(); if(scroll) scrollTour(); }
+  $("prev").addEventListener("click",function(){ if(idx>0) navTo(idx-1,true); });
+  $("next").addEventListener("click",function(){ var t=idx===STEPS.length-1?0:idx+1; navTo(t, t===0); });
   (function(){
     var t=$("eli5toggle");
     t.setAttribute("aria-checked", eli5On?"true":"false");
@@ -880,7 +917,17 @@ make debug      # boot frozen, attach GDB</code>
       renderStep();
     });
   })();
-  renderStep();
+  // resolve a #step-NN hash to a STEPS index, or -1.
+  function stepFromHash(){
+    var m=(location.hash||"").match(/step-(\d+)/); if(!m) return -1;
+    var want=("0"+parseInt(m[1],10)).slice(-2);
+    return STEPS.map(function(s){return s.n;}).indexOf(want);
+  }
+  // honor a #step-NN deep link on load, otherwise start at step 1.
+  (function(){ var i=stepFromHash(); if(i>=0) idx=i; renderStep(); writeHash(); })();
+  // and follow a live hash change (edited URL / an in-page anchor). writeHash uses
+  // replaceState, which does NOT fire hashchange, so navTo can't loop back here.
+  window.addEventListener("hashchange",function(){ var i=stepFromHash(); if(i>=0&&i!==idx) navTo(i,false); });
 
   // ---------- annotated log ----------
   (function(){
@@ -909,6 +956,13 @@ make debug      # boot frozen, attach GDB</code>
       var li=document.createElement("li");
       var label = x[2]==="done"?"done":(x[2]==="now"?"building":"planned");
       li.innerHTML='<span class="n">'+x[0]+'</span><span>'+esc(x[1])+'</span><span class="st '+x[2]+'">'+label+'</span>';
+      var target=x[3];
+      if(typeof target==="number"){
+        li.classList.add("jump"); li.setAttribute("role","link"); li.tabIndex=0;
+        li.title="Jump to tour step "+STEPS[target].n;
+        li.addEventListener("click",function(){ navTo(target,true); });
+        li.addEventListener("keydown",function(e){ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); navTo(target,true); } });
+      }
       r.appendChild(li);
     });
   })();
