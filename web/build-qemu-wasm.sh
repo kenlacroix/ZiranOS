@@ -35,10 +35,17 @@ if [ ! -d "$QEMU_REPO/.git" ]; then
 else
   echo "==> ensuring $QEMU_REPO is on $QEMU_WASM_BRANCH"
   git -C "$QEMU_REPO" fetch --depth 1 origin "$QEMU_WASM_BRANCH"
-  git -C "$QEMU_REPO" checkout -B "$QEMU_WASM_BRANCH" FETCH_HEAD
+  git -C "$QEMU_REPO" checkout -f -B "$QEMU_WASM_BRANCH" FETCH_HEAD   # -f discards our patch below
 fi
-[ -f "$QEMU_REPO/tests/docker/dockerfiles/emsdk-wasm32-cross.docker" ] || {
+EMSDK_DF="$QEMU_REPO/tests/docker/dockerfiles/emsdk-wasm32-cross.docker"
+[ -f "$EMSDK_DF" ] || {
   echo "emsdk-wasm32-cross.docker not found on $QEMU_WASM_BRANCH — try QEMU_WASM_BRANCH=sync-upstream-wasmdev"; exit 1; }
+
+# Upstream's dockerfile fetches zlib from zlib.net, which DELETES old tarballs when
+# it releases a new one (1.3.1 is now a 404 — they moved to 1.3.2). Repoint that one
+# line at GitHub's permanent release mirror. Re-applied every run (checkout -f above
+# reverts it), so it survives a re-clone.
+sed -i.bak 's#https://zlib.net/zlib-$ZLIB_VERSION.tar.xz#https://github.com/madler/zlib/releases/download/v$ZLIB_VERSION/zlib-$ZLIB_VERSION.tar.xz#' "$EMSDK_DF"
 
 # 2. The Emscripten cross-compile base image (emsdk + GLib/zlib/libffi/Pixman).
 #    This Dockerfile ships inside the QEMU repo. THIS STEP IS THE LONG ONE.
