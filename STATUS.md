@@ -14,8 +14,8 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started
 | 4 | GDT / IDT / interrupts | ✅ | IDT wired for all 256 vectors (`boot/isr.asm` + `src/interrupts.rs`); `#BP` recovers, `#PF`/others report (CR2 + decoded error) and halt. `int3` self-test. See `docs/concepts/interrupts.md`. IST/TSS deferred. |
 | 5 | Keyboard input (PS/2) | ✅ | PIC remapped to 0x20–0x2F + masked to keyboard only (`src/pic.rs`); IRQ1 handler reads scancodes and echoes (`src/keyboard.rs`, US QWERTY + shift); `sti` enabled; backspace works; spurious-IRQ safe. See `docs/concepts/keyboard-and-pic.md`. |
 | 6 | Physical memory management | ✅ | `multiboot.rs` parses the Multiboot2 memory map (pointer already in RDI at handoff); `frame_allocator.rs` is a bitmap allocator over usable RAM with alloc/free/reclaim, reserving frame 0, the kernel image (`kernel_start`/`kernel_end` linker symbols), and the boot structure. Self-test + `M6:` marker asserted by CI. See `docs/concepts/physical-memory.md`. |
-| 7 | Paging / virtual memory | ⬜ | Next. First customer of the frame allocator — allocate frames to hold page tables. |
-| 8 | Heap allocator (`alloc`) | ⬜ | |
+| 7 | Paging / virtual memory | ✅ | `paging.rs` builds the kernel's own 4-level page tables from M6 frames, identity-maps physical memory, verifies them in-code, and switches `CR3` off the boot map. Exposes `translate`/`map_page` (fallible)/`unmap_page`; self-test round-trips a frame mapped above the 1 GiB window. See `docs/concepts/virtual-memory.md`. |
+| 8 | Heap allocator (`alloc`) | ⬜ | Next. `Vec`/`Box`/`String` on a heap, its pages backed by M7 mappings and M6 frames. |
 | 9 | Timer + scheduling | ⬜ | |
 | 10 | Simple shell | ⬜ | |
 | 11 | Filesystem (read) | ⬜ | |
@@ -31,20 +31,23 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started
 - **Assembles / compiles / links:** verified — `make` produces a valid Multiboot2
   ELF (`make check-header` confirms the magic).
 - **Boots under QEMU:** exercised by CI (`make run-headless`), which asserts both
-  the long-mode marker and `M6: frame allocator online`. Also boot-tested
-  natively on macOS (Apple Silicon) under UEFI — see `docs/POST_UPDATE_SETUP.md`.
+  the long-mode marker and `M7: paging enabled`. Also boot-tested natively on
+  macOS (Apple Silicon) under UEFI — see `docs/POST_UPDATE_SETUP.md`.
 - **Frame allocator:** the boot self-test proves alloc hands out distinct,
   aligned frames; reclaim returns a freed frame; and double-free / out-of-range
   free are rejected without corrupting the free count.
+- **Paging:** the kernel runs on page tables it built itself (surviving the `CR3`
+  switch proves it mapped its own code/stack/GDT/IDT); the self-test maps a frame
+  at a virtual address above the 1 GiB identity window and round-trips a sentinel
+  through both the virtual and physical address.
 
-## Next up (Milestone 7 — paging / virtual memory)
+## Next up (Milestone 8 — heap allocator)
 
-1. Build a fresh set of x86-64 page tables, allocating the frames to hold them
-   from the Milestone 6 frame allocator.
-2. Map the kernel and switch `CR3` to the new tables — the first memory the
-   kernel addresses through mappings *it* chose, not the boot identity map.
-3. This is also what finally lets the kernel touch frames above the 1 GiB
-   identity map that the allocator can already track.
+1. Reserve a virtual address range for the kernel heap and back it with pages,
+   mapped via the Milestone 7 `map_page` onto Milestone 6 frames.
+2. Implement a `GlobalAlloc` so `alloc`'s `Vec`, `Box`, and `String` work — the
+   first dynamic allocation in the kernel.
+3. This completes the memory stack: frames (M6) → pages (M7) → heap (M8).
 
 Deferred (fold in when robustness matters): a proper Rust-built GDT with a TSS +
 IST stack for the double-fault handler, so even a stack overflow reports instead

@@ -265,8 +265,8 @@
       <h1>Boot a real OS in this tab — then learn <em>how every layer works</em>.</h1>
       <p class="lead">No Linux underneath. This is a hand-written kernel — assembly boot code, a <span class="mono">no_std</span> Rust core, its own interrupt and keyboard handling — running on a tiny PC emulator right here. The tour beside it asks you to guess what happens, then shows you why.</p>
       <div class="meta">
-        <span class="tag"><b>Milestones 0–6</b> booted</span>
-        <span class="tag">from <b>512 bytes</b> to its own memory allocator</span>
+        <span class="tag"><b>Milestones 0–7</b> booted</span>
+        <span class="tag">from <b>512 bytes</b> to its own virtual memory</span>
         <span class="tag">every claim links to <b>real source</b></span>
       </div>
     </div>
@@ -458,7 +458,7 @@ make debug      # boot frozen, attach GDB</code>
           <dt>Frame <span class="term-alt">/ frame allocator</span></dt>
           <dd>Usable RAM is chopped into fixed 4 KiB chunks called <em>frames</em>. The <em>frame allocator</em> is the bookkeeper that hands a free frame out, takes it back when done, and — the part that makes it real — can hand out that same frame again later. It’s the bottom stone of the memory stack.</dd>
           <dt>Virtual memory <span class="term-alt">/ paging / page tables</span></dt>
-          <dd>A hardware trick where every address a program uses (a <em>virtual</em> address) is translated to a real physical one through lookup tables called <em>page tables</em>. It lets memory be protected, relocated, and handed out flexibly. This is the next milestone, built directly on frames.</dd>
+          <dd>A hardware trick where every address a program uses (a <em>virtual</em> address) is translated to a real physical one through lookup tables called <em>page tables</em>. It lets memory be protected, relocated, and handed out flexibly. This is now built: the kernel constructs its own page tables from frames and switches the CPU onto them, so it manages its own memory map. The heap (the next milestone) grows on top of it.</dd>
           <dt>TLB</dt>
           <dd>A small cache inside the processor that remembers recent virtual→physical translations, so paging stays fast instead of walking the page tables on every single memory access.</dd>
         </dl>
@@ -519,6 +519,9 @@ make debug      # boot frozen, attach GDB</code>
     {t:"[ok] physical memory: 121 MiB free in the frame allocator", c:"ok",
      note:"The kernel just parsed the memory map GRUB left it, found the usable RAM, and stood up a bitmap allocator that hands out physical memory 4 KiB at a time. The detailed map dump and the alloc/free self-test go to the serial log; this is the one-line headline. Before this, the kernel had no idea how much RAM existed.",
      link:{f:"src/frame_allocator.rs",l:"frame_allocator.rs"}},
+    {t:"[ok] paging: switched to kernel-built page tables", c:"ok",
+     note:"Using frames from the allocator it just built, the kernel constructed its own 4-level page tables, identity-mapped physical memory, and switched CR3 away from the bootloader’s tables to its own. The CPU now runs on a memory map the kernel controls, not the bootloader’s — every address it touches is translated through tables the kernel owns. The map/translate/unmap self-test and the “M7: paging enabled” marker go to the serial log; this is the one-line headline.",
+     link:{f:"src/paging.rs",l:"paging.rs"}},
     {t:"", c:"blank"},
     {t:"triggering a test breakpoint (int3)...", c:"info",
      note:"The kernel is about to break itself on purpose. int3 raises exception vector 3 — a “breakpoint.” On a kernel with no handler, an exception cascades to a triple fault and the machine silently reboots.",
@@ -571,10 +574,16 @@ make debug      # boot frozen, attach GDB</code>
      a:"No. Physical memory is a patchwork: real RAM, firmware-reserved regions, memory-mapped devices, and plain holes, all interleaved. The kernel can’t safely probe it — reading a device register has side effects. So the bootloader (GRUB), which surveyed the machine before our code ran, hands over a map, and the kernel manages only the parts marked usable.",
      ex:"<p>Usable RAM is chopped into 4 KiB <em>frames</em>, and a <em>bitmap allocator</em> tracks each one with a single bit — free or used. It hands a frame out, takes it back, and — the part that makes it a real allocator and not a counter — returns the <em>same</em> frame on the next request after you free it. It carefully reserves the frames it must never give away: frame 0 (null), the kernel’s own image, and the boot structure itself. This is the bottom of the memory stack; paging and the heap are built directly on it.</p>",
      links:[["src/frame_allocator.rs","frame_allocator.rs"],["src/multiboot.rs","multiboot.rs"],["docs/concepts/physical-memory.md","physical-memory.md (explainer)"]]},
-    {n:"07", ms:"what’s next", title:"You’ve reached the current edge",
-     watch:"This is as far as the OS is built — milestone 6 of 12.",
-     q:"So what turns “a machine that knows its own memory” into “an operating system”?",
-     a:"The next layers: virtual memory (paging), a heap so Rust’s Vec/Box/String work at all, running more than one thing at once, a shell, and files. Each is a milestone below — and each is meant to be built and understood, not just shipped.",
+    {n:"07", ms:"Milestone 7 · paging", title:"Building its own map of memory",
+     watch:"The “[ok] paging: switched to kernel-built page tables” line.",
+     q:"Up to now the CPU used physical addresses directly. What changes when the kernel turns on its own paging?",
+     a:"Every address the CPU touches stops being a physical address and becomes a virtual one — translated to real RAM through page tables the kernel builds and controls. Using frames from the allocator it just stood up, the kernel constructs its own 4-level page tables, identity-maps physical memory, and switches CR3 from the bootloader’s tables to its own.",
+     ex:"<p>Paging is the hardware trick underneath all modern memory management: a <em>virtual</em> address is walked through four levels of <em>page tables</em> to find the physical frame it maps to, and the kernel owns those tables. That’s what lets memory be placed where the kernel wants it and (next milestone) lets a heap grow into address space that no physical RAM sat at before.</p><p>The honesty here is in the switch itself: the moment the kernel loads <code>CR3</code> with its own top-level table, the very next instruction fetch is already translated by the new tables. If the kernel hadn’t correctly mapped its own code, that instruction would fault into a triple fault and reset the machine. Surviving the switch <em>is</em> the proof that it mapped itself correctly. It then exposes map/translate/unmap and self-tests them on the serial log.</p>",
+     links:[["src/paging.rs","paging.rs"],["src/frame_allocator.rs","frame_allocator.rs"],["docs/concepts/virtual-memory.md","virtual-memory.md (explainer)"]]},
+    {n:"08", ms:"what’s next", title:"You’ve reached the current edge",
+     watch:"This is as far as the OS is built — milestone 7 of 12.",
+     q:"So what turns “a machine that manages its own virtual memory” into “an operating system”?",
+     a:"The next layers: a heap so Rust’s Vec/Box/String work at all, running more than one thing at once (a timer and a scheduler), a shell, and files. Each is a milestone below — and each is meant to be built and understood, not just shipped.",
      ex:"<p>The honest goal of this project isn’t a product; it’s understanding, with a public trail of how it was built — including the dead ends. This page exists so that trail is something you can <em>boot and poke at</em>, not just read. If you take one idea away: an OS is not magic, it’s a stack of small, knowable mechanisms, each of which you can hand-write.</p>",
      links:[["STATUS.md","the milestone tracker"],["docs/blog","the build log"]]}
   ];
@@ -584,8 +593,8 @@ make debug      # boot frozen, attach GDB</code>
     ["4","Interrupts / exceptions","done"],
     ["5","Keyboard input","done"],
     ["6","Physical memory","done"],
-    ["7","Paging / virtual memory","now"],
-    ["8","Heap (Vec, Box, String)","todo"],
+    ["7","Paging / virtual memory","done"],
+    ["8","Heap (Vec, Box, String)","now"],
     ["9","Timer + scheduling","todo"],
     ["10","A shell","todo"],
     ["11","Filesystem","todo"],

@@ -1,9 +1,41 @@
 # The illusion of memory
 
-*Milestone 7 — paging / virtual memory. Draft in progress.*
+*Milestone 7 — paging / virtual memory. The kernel stops using the map the
+bootloader handed it and starts drawing its own.*
 
-> Draft: office-hours below; scope-guard, eng-plan, build, and retro fill in as
-> the milestone proceeds.
+> New to this? Read [docs/concepts/virtual-memory.md](../concepts/virtual-memory.md)
+> alongside — it explains the 4-level page walk and why the kernel builds its own
+> tables, from scratch.
+
+Milestone 6 taught the kernel what physical memory exists. This one adds the
+indirection every later abstraction leans on: **virtual memory**. The CPU stops
+addressing RAM directly — every address is now translated through page tables the
+kernel builds and controls. We start on the flat identity map `boot/boot.asm` set
+up just to reach long mode, build our own 4-level tables from Milestone 6 frames,
+verify them, and switch `CR3` to them without the machine falling over.
+
+### Milestone 7 — paging — checklist
+
+Think
+- [x] office-hours — below
+- [x] scope-guard — below
+
+Plan
+- [x] eng-plan — [docs/planning/milestone-07-eng-plan.md](../planning/milestone-07-eng-plan.md)
+
+Build
+- [x] Working, demoable state; `make` clean; header check passes
+- [x] No new warnings; new `unsafe`/asm justified (CR3/invlpg options verified)
+
+Review
+- [x] kernel-review — 3-lens adversarial pass over the diff
+
+Security
+- [x] No new attack surface (still ring 0, one address space, no data boundary) — /red-team N/A
+
+Reflect
+- [x] document-milestone (STATUS/README/this post)
+- [ ] CI green (build + headless QEMU boot) — runs on push
 
 ## Office hours
 
@@ -59,5 +91,103 @@
    temptation is to "do it properly": W^X / NX-bit enforcement, guard pages as a
    security feature, or per-process address spaces. NX/W^X is *security hardening*
    (an explicit non-goal); separate address spaces belong to userspace (M13). Keep
-   M7 flags minimal — present + writable — and defer the rest. Full `/scope-guard`
-   next.
+   M7 flags minimal — present + writable — and defer the rest.
+
+## Scope-guard
+
+Verdict: **Hold**, flags kept deliberately minimal. `PRESENT | WRITABLE` only, one
+address space, no demand paging. The identity map — rather than a higher-half
+layout — is the minimal teachable choice; higher-half and recursive mapping are
+their own later milestones.
+
+## Eng-plan (summary)
+
+A hand-rolled `src/paging.rs` (no `x86_64` crate — raw `u64`, like the rest of the
+kernel) that:
+- **identity-maps** physical memory, so `phys_to_virt` is the identity function.
+  Because all RAM is under 126 MiB, a physical frame — including a page-table frame
+  we just allocated — is reachable at its own address, and the walk reads as pure
+  page-table logic with no offset or recursion machinery in the way.
+- builds its own PML4 / PDPT / PD (2 MiB huge pages) from Milestone 6 frames,
+  **verifies the new tables in-code before switching**, then loads `CR3`.
+- exposes `translate`, `map_page` (fallible), and `unmap_page`.
+
+The build order was chosen to de-risk the one genuinely dangerous instruction,
+`mov cr3`: prove the read path (`translate`) over the *existing* boot tables first,
+then build and verify the new tables while still on the known-good map, and only
+then switch. Full plan in
+[docs/planning/milestone-07-eng-plan.md](../planning/milestone-07-eng-plan.md).
+
+## What got built
+
+- `src/paging.rs`: `translate` (the 4-level walk, with 2 MiB huge-page handling),
+  `build_address_space` + `init` (allocate and zero tables, identity-map
+  `[0, 1 GiB)`, verify, switch `CR3`), and `map_page` / `unmap_page`.
+- `kernel_main` calls `paging::init()` then `paging::self_test()` after the IDT is
+  installed and before `sti`.
+- The `Makefile` headless boot test now asserts `M7: paging enabled`.
+
+## Verification status (honest)
+
+Boot-tested live under QEMU. The serial log:
+
+```
+M7: paging enabled -- running on kernel-built page tables
+[ok] paging: mapped 0x000040000000 -> 0x000000004000, round-tripped 0xdeadbeef above the 1 GiB map
+[ok] paging: unmapped 0x000040000000
+[ok] paging: self-test left 2 intermediate tables mapped (expected)
+```
+
+The marker prints *after* the `CR3` switch — surviving it is the proof the kernel
+mapped its own code, stack, GDT, and IDT. The round-trip is at `0x4000_0000`, one
+byte past the identity window, so the write landing in the right physical frame
+can *only* mean our new tables worked.
+
+## Retro
+
+**Plan vs. reality.** The eng-plan held up almost exactly. The identity-map
+decision paid off — `map_page` and `translate` really do read like the textbook
+description of a page walk, because `phys_to_virt` is a no-op. One thing I did
+*better* than the plan: it said "inspect the new tables in GDB before trusting the
+switch"; instead I made that a permanent in-code check — `init` walks the new
+tables with `translate_from` and asserts they map correctly *while still on the
+boot map*, so a bug panics safely instead of triple-faulting. Automated beats
+manual.
+
+**What broke, and for how long.** Nothing — and that's the interesting part.
+`mov cr3`, the instruction most likely to silently triple-fault and reboot with no
+message, worked on the first try. The honest number is near-zero debugging, and it
+wasn't luck: verifying the new map *before* the switch, while still on the
+known-good boot tables, converts a silent hardware triple-fault into a loud,
+recoverable software panic. The scariest step was de-fanged by construction.
+
+**The technique worth stealing.** Paging is famous for silent triple-faults
+because people load `CR3` and hope. Don't. Walk the new tables in software first
+(you're still on the old, working map), assert the addresses you're about to
+depend on — instruction pointer, stack, GDT, IDT — resolve correctly, and only
+then switch. A triple fault gives you nothing; a failed assertion gives you a
+message and a live machine.
+
+**The assumption that cost the most (the lede).** Almost nothing cost time during
+the build — but the review found the safety net I'd written didn't exist.
+`phys_to_virt`'s guard was a `debug_assert!`, and this kernel builds `--release`,
+where `debug_assert!` compiles to nothing. A guard you can't see fire is a guard
+you can't trust. For a kernel that ships its release profile, invariants that must
+hold get a real `assert!`.
+
+**One thing to do differently.** Decide an API's fallibility up front. `map_page`
+inherited a panic from `init`'s frame allocation, but a *runtime* map — which the
+Milestone 8 heap will do as it grows — has to handle running out of frames. The
+review is where the return type became `Result`; it should have been the signature
+I wrote first. Next module: ask "who calls this at runtime, and can it fail?"
+before writing the type.
+
+## Takeaway for the next person
+
+Virtual memory is one idea — *put a translation table between the CPU and RAM* —
+and once it's on, the kernel decides what every address means. Building the tables
+is mechanical; the danger is the handoff, the instant you point `CR3` at your own
+work and the CPU trusts it for the very next instruction. The craft of doing it
+safely is refusing to take that on faith: prove the new map is right while the old
+one is still holding you up. Next: **pages → heap.** Milestone 8 puts `Vec`,
+`Box`, and `String` on top of these mappings.

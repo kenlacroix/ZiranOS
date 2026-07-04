@@ -24,10 +24,11 @@ assembly, hands off to a `no_std` Rust kernel that prints to the screen, and
 installs interrupt handlers so a fault is reported instead of silently rebooting
 (it catches a deliberate breakpoint and keeps running), takes keyboard input
 over the PS/2 controller — typing echoes to the screen, interrupt-driven — and
-now reads the Multiboot2 memory map to stand up a bitmap **physical-frame
-allocator** over usable RAM (alloc, free, and reclaim). That covers milestones
-1–6. Everything assembles, compiles, and links on stable Rust; CI boots the image
-under headless QEMU on every push.
+reads the Multiboot2 memory map to stand up a bitmap **physical-frame allocator**
+over usable RAM (alloc, free, and reclaim), and builds its own **page tables** —
+switching `CR3` off the boot map to virtual memory it controls (`map`/`translate`/
+`unmap`). That covers milestones 1–7. Everything assembles, compiles, and links on
+stable Rust; CI boots the image under headless QEMU on every push.
 
 New here? Start with the plain-language explainers in
 [`docs/concepts/`](docs/concepts/) — e.g. [interrupts](docs/concepts/interrupts.md),
@@ -45,7 +46,8 @@ serve `web/`).
 | M4 GDT/IDT/interrupts | ✅ done |
 | M5 keyboard input (PS/2) | ✅ done |
 | M6 physical memory (frame allocator) | ✅ done |
-| M7+ paging, heap, scheduling, shell, FS | ⬜ next |
+| M7 paging / virtual memory | ✅ done |
+| M8+ heap, scheduling, shell, FS | ⬜ next |
 
 ## What happens when it boots
 
