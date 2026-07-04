@@ -15,7 +15,8 @@
 //! The per-vector entry stubs live in `boot/isr.asm`; this file is the Rust half
 //! that builds the table and decides what each fault *means*.
 
-use crate::{hlt_loop, keyboard, pic, print, println, serial_println};
+use crate::{hlt_loop, keyboard, pic, print, println, serial_print, serial_println};
+use core::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 
 /// The vector the timer's IRQ0 is remapped to (see `pic`): 0x20 + 0 = 0x20.
 const TIMER_VECTOR: usize = pic::PIC1_OFFSET as usize;
@@ -28,9 +29,62 @@ const KEYBOARD_VECTOR: usize = pic::PIC1_OFFSET as usize + 1;
 const SYSCALL_VECTOR: usize = 0x80;
 
 /// Syscall numbers, passed by the caller in `rax`. The minimal M13 set: print one
-/// character (`rdi` = the byte) and signal the user excursion is finished.
+/// character (`rdi` = the byte) and signal the user excursion is finished. M15
+/// adds the first *pointer-carrying* syscalls (`rdi` = buffer, `rsi` = length).
 pub const SYS_PRINT: u64 = 1;
 pub const SYS_EXIT: u64 = 2;
+/// M15: write `rsi` bytes from the user buffer at `rdi` to the console — the
+/// kernel's first copy-from-user. Validates the range with [`crate::paging::user_range_ok`]
+/// before touching it, so a caller cannot make the kernel read memory the caller
+/// couldn't. Returns the byte count, or -1 (`u64::MAX`) on rejection.
+pub const SYS_WRITE: u64 = 3;
+/// M15, the teaching device: `SYS_WRITE` *with the copy-from-user check omitted* —
+/// the confused deputy. It dereferences whatever pointer the caller passes with
+/// full ring-0 power, so a ring-3 program can make it read a kernel-only page (the
+/// planted FLAG) and hand the bytes back. Worse still, an unmapped or non-canonical
+/// pointer would fault the *kernel* (a ring-0 #PF/#GP the ring-3 recovery path
+/// doesn't handle → fatal), so the missing check is both an info-leak and a crash
+/// primitive. Deliberately broken to be *observed* (like M11's loose extent
+/// check); it must never exist in a hardened kernel. See
+/// `docs/planning/milestone-15-eng-plan.md`.
+pub const SYS_WRITE_UNCHECKED: u64 = 4;
+
+/// Upper bound on a single `SYS_WRITE`. A syscall must never do an unbounded copy
+/// on a caller-supplied length — a huge `rsi` is itself an attack (DoS, and the
+/// arithmetic surface the red-team named). Both write arms reject `len > MAX_WRITE`
+/// *before* any dereference or validation.
+const MAX_WRITE: usize = 256;
+
+/// Capture of the bytes the most recent `SYS_WRITE`/`SYS_WRITE_UNCHECKED` emitted,
+/// so the M15 self-test can prove a *real* flag capture by byte-equality against
+/// the planted secret — not by trusting whatever scrolled past on the console
+/// (office-hours Q4: working vs. accidentally working). Plain atomics: the write
+/// arm runs with IF=0 inside the single-threaded ring-3 excursion, and the test
+/// reads it only after the excursion returns.
+static LAST_WRITE_BUF: [AtomicU8; MAX_WRITE] = [const { AtomicU8::new(0) }; MAX_WRITE];
+static LAST_WRITE_LEN: AtomicUsize = AtomicUsize::new(0);
+
+/// Clear the capture buffer before an excursion, so a stale value from a prior
+/// write can't masquerade as a fresh capture. Zeroes the bytes too, not just the
+/// length: in a module whose whole point is "the flag must not leak," letting the
+/// captured secret sit resident in a static after the test read it is a smell —
+/// so the "nothing leaked" case is structurally empty, not merely unread.
+pub fn reset_last_write() {
+    for slot in LAST_WRITE_BUF.iter() {
+        slot.store(0, Ordering::SeqCst);
+    }
+    LAST_WRITE_LEN.store(0, Ordering::SeqCst);
+}
+
+/// Copy the bytes the most recent write emitted into `out`; returns the length
+/// (clamped to `out`). Read by the M15 self-test to assert a capture.
+pub fn last_write_into(out: &mut [u8]) -> usize {
+    let n = LAST_WRITE_LEN.load(Ordering::SeqCst).min(out.len());
+    for (i, slot) in out.iter_mut().enumerate().take(n) {
+        *slot = LAST_WRITE_BUF[i].load(Ordering::SeqCst);
+    }
+    n
+}
 
 /// The exact register state our assembly stub (`isr_common` in boot/isr.asm)
 /// leaves on the stack, in ascending memory order. `interrupt_dispatch` receives
@@ -387,11 +441,81 @@ fn syscall(ctx: &mut InterruptContext) {
             serial_println!("[m13] syscall: SYS_EXIT (CS={:#x}, CPL={})", ctx.cs, cpl);
             crate::usermode::resume_kernel(ctx);
         }
+        SYS_WRITE => sys_write(ctx, true),
+        SYS_WRITE_UNCHECKED => sys_write(ctx, false),
         _ => {
             serial_println!("[m13] syscall: unknown number {} (CPL={})", number, cpl);
             ctx.rax = u64::MAX; // -1: unknown syscall
         }
     }
+}
+
+/// The M15 copy-from-user path shared by `SYS_WRITE` (`validate = true`) and
+/// `SYS_WRITE_UNCHECKED` (`validate = false`). Reads `ctx.rsi` bytes from the user
+/// pointer in `ctx.rdi`, prints them, and records them for the self-test; sets
+/// `ctx.rax` to the byte count on success or `u64::MAX` (-1) on rejection.
+///
+/// This is the whole M15 lesson in one function. The kernel is a *deputy* acting
+/// on the caller's behalf with ring-0 power. Ring 3 cannot read a kernel page
+/// directly — the CPU faults it (M13). But if the kernel dereferences a pointer
+/// the caller chose, the CPU sees a ring-0 access and allows it: the boundary is
+/// silent. `validate` is the software check that closes that gap by proving,
+/// *without dereferencing*, that the caller could have read the range itself. Drop
+/// it and the deputy is confused — it reads the kernel-only FLAG and hands it back.
+fn sys_write(ctx: &mut InterruptContext, validate: bool) {
+    let ptr = ctx.rdi;
+    let len = ctx.rsi;
+    let cpl = ctx.cs & 3;
+
+    // Bound the length first — before any validation or dereference. An unbounded
+    // copy on a caller-chosen length is an attack regardless of the pointer.
+    if len as usize > MAX_WRITE {
+        serial_println!(
+            "[m15] SYS_WRITE rejected: len {} exceeds MAX_WRITE {} (CPL={})",
+            len, MAX_WRITE, cpl
+        );
+        ctx.rax = u64::MAX;
+        return;
+    }
+
+    // The confused-deputy check. `user_range_ok` walks the page tables (never the
+    // memory) and confirms every page of [ptr, ptr+len) is present and U/S=1 — i.e.
+    // the caller could have read it unaided. Skipped by SYS_WRITE_UNCHECKED, which
+    // is exactly how the kernel-only FLAG leaks.
+    if validate && !crate::paging::user_range_ok(ptr, len) {
+        serial_println!(
+            "[m15] SYS_WRITE rejected by copy_from_user: [{:#x}, +{}) is not user-readable (CPL={})",
+            ptr, len, cpl
+        );
+        ctx.rax = u64::MAX;
+        return;
+    }
+
+    let n = len as usize;
+    LAST_WRITE_LEN.store(0, Ordering::SeqCst);
+    serial_print!(
+        "[m15] SYS_WRITE{} emitted {} bytes: \"",
+        if validate { "" } else { "_UNCHECKED" },
+        n
+    );
+    for i in 0..n {
+        // SAFETY (validate = true): `user_range_ok` just proved every page of
+        // [ptr, ptr+len) present *and* the whole range canonical (it rejects any
+        // end past 2^47), so this read can raise neither #PF (present) nor #GP
+        // (canonical) — it cannot fault.
+        // SAFETY (validate = false): there is NONE — `ptr` is attacker-chosen and
+        // may name a kernel page (leaks it) or be unmapped/non-canonical (takes a
+        // ring-0 #PF/#GP the ring-3 recovery path won't catch → fatal). This is the
+        // deliberate confused-deputy footgun the milestone demonstrates; bounded
+        // `n` is the only limit.
+        let byte = unsafe { core::ptr::read_volatile((ptr as *const u8).add(i)) };
+        LAST_WRITE_BUF[i].store(byte, Ordering::SeqCst);
+        print!("{}", byte as char); // the visible demo on VGA
+        serial_print!("{}", byte as char); // and on the serial log CI reads
+    }
+    serial_println!("\" (CPL={})", cpl);
+    LAST_WRITE_LEN.store(n, Ordering::SeqCst);
+    ctx.rax = len; // bytes written
 }
 
 /// Milestone 13 (step 3): prove the syscall path end-to-end *before* ring 3

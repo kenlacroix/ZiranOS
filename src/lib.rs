@@ -238,6 +238,13 @@ pub extern "C" fn kernel_main(multiboot_info_addr: u64) -> ! {
     // This is the proof the boundary is real, not just unused.
     usermode::enforcement_test();
 
+    // Milestone 15: break the privilege boundary. Plant a FLAG on a kernel-only
+    // page and attack it from ring 3 — a direct read (CPU faults it) and the
+    // confused-deputy syscall (leaks it without a copy-from-user check, holds with
+    // one). The lesson beyond M13: the CPU stops unauthorized *access*, but only
+    // software stops authorized *misuse*. See docs/planning/milestone-15-eng-plan.md.
+    usermode::security_test();
+
     task::init();
     task::spawn(shell::shell_main);
     task::yield_now();

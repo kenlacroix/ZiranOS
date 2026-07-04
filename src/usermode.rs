@@ -28,6 +28,14 @@
 //! args passed in registers (no user pointer to validate yet — that, and
 //! copy-from-user, is the M15 "confused deputy" surface), no ELF, no loader, no
 //! scheduler integration. See `docs/planning/milestone-13-eng-plan.md`.
+//!
+//! **Milestone 15** ([`security_test`]) turns the enforcement preview into a flag
+//! capture. It plants a FLAG on a kernel-only page and attacks it two ways: a
+//! direct ring-3 read (the CPU faults it, M13's mechanism) and the *confused
+//! deputy* — a `SYS_WRITE` that reads a caller-supplied pointer. Without a
+//! copy-from-user check the deputy leaks the flag; with one it holds. The lesson
+//! extends M13's: the CPU stops *unauthorized access*, but only software can stop
+//! *authorized misuse*. See `docs/planning/milestone-15-eng-plan.md`.
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
@@ -244,4 +252,201 @@ fn unmap_user_program(code_frame: PhysFrame, stack_frame: PhysFrame) {
     paging::unmap_page(UVA_STACK);
     frame_allocator::free(code_frame);
     frame_allocator::free(stack_frame);
+}
+
+// ---------------------------------------------------------------------------
+// Milestone 15 — break the privilege boundary (flag capture).
+// ---------------------------------------------------------------------------
+
+/// Where the M15 flag lives: a dedicated page at 1.5 GiB. It sits above the M8
+/// heap and above the 1 GiB huge-page identity window (so `map_page` can place a
+/// 4 KiB mapping there), and it shares the upper tables `PML4[0]`/`PDPT[1]` that
+/// [`paging::map_user_page`] permanently loosened to U/S=1 for the M13 user pages
+/// — yet its own PD/PT/leaf, built by `map_page`, stay U/S=0, so the CPU's
+/// U/S-AND still denies ring 3. That coexistence is precisely the property under
+/// test; [`plant_secret`] asserts it.
+const SECRET_VA: u64 = 0x6000_0000;
+
+/// The flag. Exactly 32 bytes so the attack blobs can read a fixed length and the
+/// self-test can assert an exact capture. Planted on the U/S=0 [`SECRET_VA`] page;
+/// nothing in the filesystem or any user mapping ever names it — the only ring-0
+/// code that reads it is a `SYS_WRITE` acting on a ring-3 request.
+const SECRET: &[u8] = b"FLAG{ring3-cant-read-kernel-mem}";
+
+/// A legitimate user buffer's contents, pre-loaded into the user stack page before
+/// the [`BLOB_WRITE_USER`] excursion. Proves the validated `SYS_WRITE` *permits* a
+/// real user pointer — a validator that denied everything would pass the block
+/// test while being useless (office-hours Q4).
+const USER_MSG: &[u8] = b"legit-user-buffer\n";
+
+/// Blob: `mov rax, [SECRET_VA]` then spin — a *direct* ring-3 read of the
+/// kernel-only secret page. Raises **#PF** (U/S) at CPL 3, the same mechanism as
+/// M13's `BLOB_READ_KERNEL`, aimed at the flag. The hardware half of the boundary.
+static BLOB_READ_SECRET: [u8; 12] = [
+    0x48, 0xA1, 0x00, 0x00, 0x00, 0x60, 0x00, 0x00, 0x00, 0x00, // mov rax, [0x60000000]
+    0xEB, 0xFE, // jmp $ (never reached — the read faults first)
+];
+
+/// Blob: `SYS_WRITE_UNCHECKED(SECRET_VA, 32)` then `SYS_EXIT` — the confused-deputy
+/// attack. Asks the kernel to read the kernel-only secret on the caller's behalf.
+/// With no copy-from-user check the deputy obliges (ring-0 read), and the 32 flag
+/// bytes are printed and captured. `mov edi/esi` are imm32 (zero-extended).
+static BLOB_LEAK: [u8; 26] = [
+    0xB8, 0x04, 0x00, 0x00, 0x00, // mov eax, 4        (SYS_WRITE_UNCHECKED)
+    0xBF, 0x00, 0x00, 0x00, 0x60, // mov edi, 0x60000000 (SECRET_VA)
+    0xBE, 0x20, 0x00, 0x00, 0x00, // mov esi, 32       (SECRET.len())
+    0xCD, 0x80, // int 0x80  -> the deputy leaks the flag, returns here
+    0xB8, 0x02, 0x00, 0x00, 0x00, // mov eax, 2        (SYS_EXIT)
+    0xCD, 0x80, // int 0x80
+    0xEB, 0xFE, // jmp $ (safety net)
+];
+
+/// Blob: `SYS_WRITE(SECRET_VA, 32)` then `SYS_EXIT` — the same attack through the
+/// *validated* syscall. `copy_from_user` walks the tables, finds SECRET_VA's leaf
+/// U/S=0, and returns -1 without reading a byte. The syscall still returns, so the
+/// blob reaches `SYS_EXIT` cleanly (no fault).
+static BLOB_WRITE_SECRET: [u8; 26] = [
+    0xB8, 0x03, 0x00, 0x00, 0x00, // mov eax, 3        (SYS_WRITE)
+    0xBF, 0x00, 0x00, 0x00, 0x60, // mov edi, 0x60000000 (SECRET_VA)
+    0xBE, 0x20, 0x00, 0x00, 0x00, // mov esi, 32
+    0xCD, 0x80, // int 0x80  -> rejected by copy_from_user, returns -1
+    0xB8, 0x02, 0x00, 0x00, 0x00, // mov eax, 2        (SYS_EXIT)
+    0xCD, 0x80, // int 0x80
+    0xEB, 0xFE, // jmp $
+];
+
+/// Blob: `SYS_WRITE(UVA_STACK, 18)` then `SYS_EXIT` — a *legitimate* call. The
+/// buffer is the blob's own user stack page (U/S=1), pre-loaded by the kernel with
+/// [`USER_MSG`]. `copy_from_user` accepts it and the bytes print. Proves validation
+/// permits, not just denies.
+static BLOB_WRITE_USER: [u8; 26] = [
+    0xB8, 0x03, 0x00, 0x00, 0x00, // mov eax, 3        (SYS_WRITE)
+    0xBF, 0x00, 0x00, 0x10, 0x50, // mov edi, 0x50100000 (UVA_STACK)
+    0xBE, 0x12, 0x00, 0x00, 0x00, // mov esi, 18       (USER_MSG.len())
+    0xCD, 0x80, // int 0x80  -> accepted, prints USER_MSG, returns 18
+    0xB8, 0x02, 0x00, 0x00, 0x00, // mov eax, 2        (SYS_EXIT)
+    0xCD, 0x80, // int 0x80
+    0xEB, 0xFE, // jmp $
+];
+
+/// Plant the flag on a dedicated **kernel-only** page. `map_page` (not
+/// `map_user_page`) guarantees the leaf is U/S=0, so a ring-3 read of [`SECRET_VA`]
+/// #PFs and only a confused deputy can reach it. The page persists for the rest of
+/// boot — a kernel secret that simply exists, as one would in a real kernel.
+fn plant_secret() {
+    let frame = frame_allocator::alloc().expect("m15: no frame for the secret page");
+    paging::map_page(SECRET_VA, frame.start_address(), paging::WRITABLE)
+        .expect("m15: map secret page");
+    // SAFETY: SECRET_VA is now mapped writable in the live address space; the
+    // kernel (ring 0) may write this U/S=0 page, and SECRET (32 B) fits one frame.
+    unsafe {
+        core::ptr::copy_nonoverlapping(SECRET.as_ptr(), SECRET_VA as *mut u8, SECRET.len());
+    }
+    // Prove the page really is kernel-only before relying on it as the target: a
+    // U/S=0 leaf means `user_range_ok` denies it and a ring-3 read will #PF. If this
+    // fires, every "held" result below would be vacuous (office-hours Q4).
+    assert!(
+        !paging::user_range_ok(SECRET_VA, SECRET.len() as u64),
+        "m15: the secret page is user-accessible — the boundary under test does not exist"
+    );
+}
+
+/// Run a blob that finishes via `SYS_EXIT` (not a fault) and assert the clean exit.
+/// Generalizes M13's `self_test` launch so the M15 syscall blobs reuse the exact
+/// excursion discipline (map → IF-off → enter → restore → assert). `preload`, if
+/// present, is written into the mapped user **stack** page at `UVA_STACK` before
+/// entry — the legitimate-buffer case for `SYS_WRITE`.
+fn run_user_blob(blob: &[u8], preload: Option<&[u8]>) {
+    let (code_frame, stack_frame) = map_user_program(blob);
+
+    if let Some(bytes) = preload {
+        assert!(bytes.len() <= 4096, "m15: preload exceeds the user stack page");
+        // SAFETY: UVA_STACK is a freshly mapped, writable, U/S=1 user page in the
+        // live address space; the kernel may write it, `bytes` fits the page, and
+        // the blob's own stack grows down from UVA_STACK_TOP so it won't clobber
+        // these low bytes.
+        unsafe {
+            core::ptr::copy_nonoverlapping(bytes.as_ptr(), UVA_STACK as *mut u8, bytes.len());
+        }
+    }
+
+    LAST_VIOLATION.store(0, Ordering::SeqCst);
+    let was = interrupts::save_and_disable();
+    // SAFETY: same preconditions as `self_test`'s launch — GDT, DPL-3 gate, and
+    // user mappings installed; the blob returns to ring 0 via SYS_EXIT's rewrite.
+    unsafe {
+        usermode_enter(UVA_CODE, UVA_STACK_TOP);
+    }
+    interrupts::restore(was);
+
+    assert_eq!(
+        LAST_VIOLATION.load(Ordering::SeqCst),
+        0,
+        "m15: the blob faulted instead of returning via SYS_EXIT"
+    );
+    unmap_user_program(code_frame, stack_frame);
+}
+
+/// Milestone 15 — break the privilege boundary (flag capture). Plants a FLAG on a
+/// kernel-only page, then runs four ring-3 attacks and asserts each outcome, so CI
+/// pins the whole lesson: the CPU stops a *direct* read, but only `copy_from_user`
+/// stops a syscall that reads a caller-chosen pointer with ring-0 power.
+pub fn security_test() {
+    plant_secret();
+
+    // (0) Pin the validator's rejection logic directly — the red-team's findings as
+    // CI-asserted invariants. copy_from_user must deny: a kernel identity page (the
+    // aliasing angle — 0xb8000 is U/S=0 low memory), the first non-canonical address
+    // (2^47 — the deref would #GP the kernel, not #PF), and a range that overflows.
+    assert!(!paging::user_range_ok(0xb8000, 1), "m15: validator must deny a kernel identity page");
+    assert!(!paging::user_range_ok(1 << 47, 1), "m15: validator must deny a non-canonical pointer");
+    assert!(!paging::user_range_ok(u64::MAX, 1), "m15: validator must deny an overflowing range");
+    serial_println!("[m15] copy_from_user rejects kernel, non-canonical, and overflowing ranges");
+
+    // (1) Direct ring-3 read of the secret page → #PF (U/S), caught at CPL 3. The
+    // hardware half of the boundary, aimed at the flag (M13 probe 8, on the secret).
+    run_violation("a direct read of the kernel-only secret page", &BLOB_READ_SECRET, 14);
+    serial_println!("[m15] HELD: direct ring-3 read of the secret → #PF at CPL 3, flag never read");
+
+    // (2a) The confused deputy. SYS_WRITE_UNCHECKED reads SECRET_VA on the caller's
+    // behalf with no copy-from-user check → the kernel-only flag is leaked. Prove a
+    // *real* capture by byte-equality, not by trusting the console.
+    interrupts::reset_last_write();
+    run_user_blob(&BLOB_LEAK, None);
+    let mut buf = [0u8; 64];
+    let n = interrupts::last_write_into(&mut buf);
+    assert_eq!(
+        &buf[..n], SECRET,
+        "m15: the unchecked deputy should have leaked the exact flag"
+    );
+    serial_println!(
+        "[m15] CAPTURED: the unchecked deputy leaked the flag → {:?}",
+        core::str::from_utf8(&buf[..n]).unwrap_or("<non-utf8>")
+    );
+
+    // (2b) The same attack through the validated SYS_WRITE. copy_from_user walks the
+    // tables, sees SECRET_VA is U/S=0, and rejects — not one byte read or printed.
+    interrupts::reset_last_write();
+    run_user_blob(&BLOB_WRITE_SECRET, None);
+    assert_eq!(
+        interrupts::last_write_into(&mut buf),
+        0,
+        "m15: the validated SYS_WRITE must emit nothing for the kernel pointer"
+    );
+    serial_println!("[m15] CONTAINED: copy_from_user rejected the kernel pointer — nothing leaked");
+
+    // (2c) Anti-"accidentally working": the validated SYS_WRITE must still pass a
+    // *legitimate* U/S=1 user buffer, or the containment above proves nothing.
+    interrupts::reset_last_write();
+    run_user_blob(&BLOB_WRITE_USER, Some(USER_MSG));
+    let n = interrupts::last_write_into(&mut buf);
+    assert_eq!(
+        &buf[..n], USER_MSG,
+        "m15: the validated SYS_WRITE should pass a legitimate user buffer through"
+    );
+    serial_println!("[m15] PERMITS: the validated SYS_WRITE passed a legitimate user buffer — a check, not a wall");
+
+    serial_println!(
+        "M15: privilege boundary — flag leaked by the unchecked deputy, contained by copy_from_user"
+    );
 }

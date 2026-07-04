@@ -162,6 +162,90 @@ fn translate_from(pml4_phys: u64, virt: u64) -> Option<u64> {
     Some((entry & ADDR_MASK) + (virt & 0xFFF))
 }
 
+/// Copy-from-user validation (Milestone 15). Return `true` iff **every** 4 KiB
+/// page spanned by `[uaddr, uaddr + len)` is present *and* user-accessible
+/// (U/S=1) in the live address space — the check a syscall must pass before it
+/// dereferences a user-supplied pointer with ring-0 privilege.
+///
+/// The whole point of M15: the hardware ring/page boundary stops ring 3 from
+/// *directly* reading a kernel page, but it does nothing when the kernel itself
+/// dereferences a pointer the caller chose. A syscall that reads `uaddr` on the
+/// caller's behalf is a *confused deputy* unless it first proves the caller could
+/// have read `uaddr` on its own. That proof is a page-table walk, done **here
+/// without ever touching the memory** — dereferencing the pointer to test it
+/// would *be* the bug (it faults on an unmapped pointer, and on the very kernel
+/// page we are trying to protect it would succeed and leak). So we read the page
+/// *tables*, not the page.
+///
+/// Rejects, all without a dereference: a `uaddr + len` that overflows 64 bits;
+/// any page in the range that is not `PRESENT`; any page whose walk hits a U/S=0
+/// entry at *any* level (the CPU ANDs U/S down the walk, so a kernel-only PD over
+/// a nominally-user leaf still denies — and, crucially, a U/S=0 leaf under the
+/// loosened shared `PML4[0]` still denies, which is what keeps the M15 secret
+/// safe). `len == 0` is vacuously true — a zero-length copy reads nothing.
+pub fn user_range_ok(uaddr: u64, len: u64) -> bool {
+    if len == 0 {
+        return true;
+    }
+    let end = match uaddr.checked_add(len) {
+        Some(end) => end,
+        None => return false, // uaddr + len wrapped past 2^64 — a classic overflow attack
+    };
+    // Reject anything outside the canonical low half [0, 2^47). The page walk below
+    // only consults bits 0..47 (`table_index` masks 9 bits per level), but the
+    // syscall dereferences the *full* 64-bit pointer — so a pointer whose low 48
+    // bits name a real user page but with any bit 48..63 set would pass the walk
+    // and then #GP the kernel on a non-canonical access (a ring-3-triggerable DoS,
+    // found by the M15 red-team). All user mappings live far below 2 GiB, so
+    // confining the whole range to the canonical low half closes that gap and costs
+    // legitimate callers nothing.
+    const USER_ADDR_LIMIT: u64 = 1 << 47;
+    if end > USER_ADDR_LIMIT {
+        return false;
+    }
+    // Every page the range touches: the page holding the first byte through the
+    // page holding the last byte (`end` is exclusive, so `end - 1`).
+    let last = (end - 1) & !(FRAME_SIZE - 1);
+    let mut page = uaddr & !(FRAME_SIZE - 1);
+    loop {
+        if !page_user_accessible(page) {
+            return false;
+        }
+        if page == last {
+            return true;
+        }
+        page += FRAME_SIZE;
+    }
+}
+
+/// Walk the live page tables for `virt` and report whether ring 3 could read it:
+/// present **and** U/S=1 at every level down to the governing (leaf or huge)
+/// entry. Same shape as [`translate_from`], but it AND-s the U/S bit down the walk
+/// exactly as the MMU does, instead of computing an address. Reads only tables.
+fn page_user_accessible(virt: u64) -> bool {
+    let mut table_phys = read_cr3() & ADDR_MASK;
+    // Walk PML4 (level 3) -> PDPT (2) -> PD (1), stopping early on a huge page.
+    for level in (1..=3).rev() {
+        let index = table_index(virt, level);
+        // SAFETY: `table_phys` is CR3's PML4 on the first pass, then a present
+        // next-level frame read from a valid table — all within the identity map.
+        let entry = unsafe { read_entry(table_phys, index) };
+        // One missing bit at any level denies the access, just as the MMU walk does.
+        if entry & PRESENT == 0 || entry & USER == 0 {
+            return false;
+        }
+        // A present, user-accessible huge page (2 MiB at PD, 1 GiB at PDPT) is the
+        // governing entry — there is no lower table, so the walk ends here.
+        if level <= 2 && entry & HUGE != 0 {
+            return true;
+        }
+        table_phys = entry & ADDR_MASK; // descend to the next-level table
+    }
+    // `table_phys` is the PT (level 0); the 4 KiB leaf must itself be present + user.
+    let entry = unsafe { read_entry(table_phys, table_index(virt, 0)) };
+    entry & PRESENT != 0 && entry & USER != 0
+}
+
 /// Write `entry` at `index` of the page table at physical frame `table_phys`.
 ///
 /// SAFETY: `table_phys` must be a real, 4 KiB-aligned page-table frame within the
