@@ -33,9 +33,11 @@ between tasks, so two tasks that never yield are still interleaved (a task is ju
 a saved stack pointer, switched by hand-written assembly) — and now runs an
 interactive **shell** as one of those tasks: the keyboard interrupt drops
 keystrokes into a lock-free ring, and the shell drains it to run `help`, `echo`,
-`clear`, `mem`, and `ps`. That covers milestones 1–10. Everything assembles,
-compiles, and links on stable Rust; CI boots the image under headless QEMU on
-every push.
+`clear`, `mem`, and `ps`. Most recently it grew a read-only **filesystem** — a
+minimal custom format on an in-kernel RAM disk, where a "file" is a header's lie
+about a flat run of bytes — so the shell can `ls` and `cat`. That covers
+milestones 1–11. Everything assembles, compiles, and links on stable Rust; CI
+boots the image under headless QEMU on every push.
 
 New here? Start with the plain-language explainers in
 [`docs/concepts/`](docs/concepts/) — e.g. [interrupts](docs/concepts/interrupts.md),
@@ -57,7 +59,8 @@ serve `web/`).
 | M8 heap (`Vec`, `Box`, `String`) | ✅ done |
 | M9 timer + preemptive scheduling | ✅ done |
 | M10 interactive shell | ✅ done |
-| M11+ filesystem, file manager | ⬜ next |
+| M11 filesystem (read) — `ls`/`cat` | ✅ done |
+| M12 file manager (end goal) | ⬜ next |
 
 ## What happens when it boots
 
@@ -66,8 +69,9 @@ GRUB (Multiboot2)
   → boot/boot.asm            32-bit: verify CPU, build page tables, enter long mode
   → boot/long_mode_init.asm  64-bit: load segments, call into Rust
   → kernel_main (src/lib.rs) banner, then bring up memory, the heap, the timer,
-                             and a scheduler, then spawn a shell task and idle —
-                             a `ziran>` prompt you can type at
+                             a scheduler, and a RAM-disk filesystem, then spawn a
+                             shell task and idle — a `ziran>` prompt you can type
+                             at (`help`, `ps`, `mem`, `ls`, `cat`)
 ```
 
 Every step is readable and hand-written; there is no `bootimage`/`build.rs`
@@ -99,6 +103,7 @@ src/                    the no_std Rust kernel
   pit.rs                  8254 PIT: the periodic 100 Hz timer (IRQ0)
   task.rs                 tasks, the context switch, the round-robin scheduler
   shell.rs                the interactive shell, run as a scheduler task
+  fs.rs                   a read-only filesystem (ZranFS) over a RAM disk
 linker.ld               places the Multiboot header first, kernel at 1 MiB
 grub/grub.cfg           one-entry GRUB menu for the bootable ISO
 Makefile                the whole build/run/debug pipeline, spelled out
