@@ -147,7 +147,7 @@ Each milestone = one working, demoable state + one blog post. Live status is tra
 ## 7. Open Discussion Points
 
 - Any recommended resources beyond the usual (OSDev wiki, *Writing an OS in Rust*, Intel SDM) worth prioritizing early.
-- Whether FAT16 read support or a custom minimal filesystem is the better learning trade for milestone 11.
+- ~~Whether FAT16 read support or a custom minimal filesystem is the better learning trade for milestone 11.~~ **Resolved (M11): a custom minimal read-only filesystem (ZranFS) on an in-kernel RAM disk.** A valid FAT16 image realistically needs `mkfs.fat` — a host-tool dependency and an opaque prebuilt blob, exactly the "build magic that hides how bytes become data" §4 forbids; the custom format builds its disk in readable Rust and teaches the "file = header's lie about flat bytes" lesson without FAT's accidental complexity. FAT16 read is deferred as a genuinely valuable future post ("reading a format the world actually uses"), not rejected. Decided — not to be relitigated (see §6). Reasoning in `docs/planning/milestone-11-eng-plan.md`.
 - Gotchas specific to running v86 against a real multiboot image (vs. its usual Linux/DOS demo images).
 
 ## 8. Security & Adversarial Self-Testing (learning track)
