@@ -1,4 +1,5 @@
-//! The interactive shell — Milestone 10.
+//! The interactive shell — Milestone 10 (with `ls`/`cat` over the RAM disk added
+//! in Milestone 11).
 //!
 //! This is the first thing the kernel runs that *feels* like a program: a
 //! read-eval-print loop you type at. The lesson of the milestone is in how input
@@ -299,6 +300,7 @@ pub fn self_test() {
     assert_eq!(parse("ls"), Command::Ls);
     assert_eq!(parse("cat motd.txt"), Command::Cat("motd.txt"));
     assert_eq!(parse("cat"), Command::Cat("")); // no filename -> empty, handled by cmd_cat
+    assert_eq!(parse("cat a b"), Command::Cat("a")); // only the first token (a filename has no spaces)
     assert_eq!(parse("echo hello  world"), Command::Echo("hello  world"));
     assert_eq!(parse("echo"), Command::Echo(""));
     assert_eq!(parse("bogus xyz"), Command::Unknown("bogus"));

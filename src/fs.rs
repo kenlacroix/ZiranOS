@@ -55,6 +55,9 @@ pub enum FsError {
     /// The image is too short for the superblock, or for the directory table the
     /// header claims (including the integer-overflow case).
     Truncated,
+    /// The header's `total_size` field disagrees with the actual image length —
+    /// the disk's own story about its size doesn't match the disk.
+    SizeMismatch,
     /// A directory entry's `offset + length` runs past the end of the image (or
     /// overflows). The headline safety check: without it `read` would slice out
     /// of bounds.
@@ -90,6 +93,11 @@ impl<'a> Fs<'a> {
         if read_u16_le(image, 0x04) != VERSION {
             return Err(FsError::UnsupportedVersion);
         }
+        // The header's total_size must match the actual image length — the field's
+        // self-consistency cross-check, and one more thing a corrupt image trips.
+        if read_u32_le(image, 0x08) as usize != image.len() {
+            return Err(FsError::SizeMismatch);
+        }
         let file_count = read_u16_le(image, 0x06) as usize;
 
         // The directory table must fit. `checked_mul`/`checked_add` guard the
@@ -100,7 +108,12 @@ impl<'a> Fs<'a> {
             return Err(FsError::Truncated);
         }
 
-        // Every entry's extent must lie within the image.
+        // Every entry's extent must lie within the image. Note we check only that
+        // it lies within the image, not that it sits in the data region
+        // (`offset >= dir_end`) or that extents don't overlap — so a crafted image
+        // could alias metadata or another file as "contents". That is harmless
+        // here (every such slice is still in-bounds and read-only), but tightening
+        // it into two more rejection cases is a natural M16 fuzzing-track addition.
         for i in 0..file_count {
             let base = SUPERBLOCK_LEN + i * DIRENT_LEN;
             let offset = read_u32_le(image, base + ENT_OFFSET) as usize;
@@ -246,6 +259,11 @@ pub fn self_test() {
 
     assert_eq!(Fs::mount(&image[..8]).err(), Some(FsError::Truncated));
 
+    // Header's total_size no longer matches the real length.
+    let mut bad_size = image.clone();
+    bad_size[8] = bad_size[8].wrapping_add(1);
+    assert_eq!(Fs::mount(&bad_size).err(), Some(FsError::SizeMismatch));
+
     // Point entry 0's offset past the end of the disk.
     let mut oob = image.clone();
     let off_field = SUPERBLOCK_LEN + ENT_OFFSET;
@@ -253,7 +271,7 @@ pub fn self_test() {
     assert_eq!(Fs::mount(&oob).err(), Some(FsError::EntryOutOfBounds));
 
     crate::serial_println!(
-        "[ok] fs: mounted {} files, motd.txt verified byte-for-byte, 4 corrupt images rejected",
+        "[ok] fs: mounted {} files, motd.txt verified byte-for-byte, 5 corrupt images rejected",
         list.len()
     );
     crate::serial_println!("M11: filesystem online");
