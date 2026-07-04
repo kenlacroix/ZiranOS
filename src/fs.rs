@@ -79,6 +79,9 @@ pub enum FsError {
     DirNotForward,
     /// A directory entry's `kind` field is neither file (0) nor directory (1).
     BadKind,
+    /// The directory tree nests deeper than `MAX_DEPTH` — a crafted deep chain
+    /// that would otherwise overflow the (guard-page-less) kernel stack.
+    TooDeep,
     /// A path component names nothing in its directory (resolution-time).
     NotFound,
     /// A path descended through something that is a file, not a directory, or
@@ -141,17 +144,21 @@ impl<'a> Fs<'a> {
         }
 
         // Validate the whole directory tree, rooted at the root table. Every
-        // entry's extent is checked in-bounds (as in v1), and every subdirectory
-        // is recursed into — but only if its region starts at/after its parent's
-        // end (the forward-ordering rule), which makes the recursion provably
-        // terminate and rejects cycles. `forward_min = SUPERBLOCK_LEN` means a
-        // top-level subdirectory can't alias the superblock or the root table.
+        // entry's extent is checked in-bounds (as in v1); every subdirectory is
+        // recursed into, but only if its table starts at/after `high_water` (the
+        // end of every table seen so far). That single monotone invariant makes
+        // tables globally disjoint and forward-ordered, so validation is linear
+        // and can't loop, blow up exponentially on a DAG, or cycle; a separate
+        // `MAX_DEPTH` cap keeps a deep chain from overflowing the stack. See
+        // `validate_dir`.
         //
         // Still-deliberate non-checks (M16 seeds): a FILE extent is checked
         // in-bounds but not confined to the data region and may alias another
-        // file's or the metadata's bytes; only directory *tables* are kept from
-        // overlapping (a free consequence of forward-ordering).
-        validate_dir(image, SUPERBLOCK_LEN, file_count * DIRENT_LEN, SUPERBLOCK_LEN)?;
+        // file's or the metadata's bytes — the hidden secret is safe against
+        // *navigation* but a crafted file entry could point at it. Only directory
+        // *tables* are kept from overlapping.
+        let mut high_water = SUPERBLOCK_LEN;
+        validate_dir(image, SUPERBLOCK_LEN, file_count * DIRENT_LEN, &mut high_water, 0)?;
 
         Ok(Fs { image, file_count })
     }
@@ -228,20 +235,41 @@ impl<'a> Fs<'a> {
     }
 }
 
+/// Deepest directory nesting `validate_dir` will follow. Real ZranFS trees are
+/// 1–2 deep; this cap keeps a crafted deep chain from overflowing the kernel
+/// stack (task stacks are 16 KiB with no guard page — see `task.rs`).
+const MAX_DEPTH: usize = 32;
+
 /// Recursively validate one directory region `[off, off + len)`: every entry's
 /// extent must lie in the image, and every subdirectory must begin at/after
-/// `forward_min` — the end of its parent's region — before we recurse into it.
+/// `*high_water` — the highest directory-table end seen so far — before we recurse
+/// into it, after which `*high_water` advances past this region.
 ///
-/// **Termination proof.** Along any root-to-descendant descent, the `forward_min`
-/// passed down equals the parent region's end, and a non-empty parent has
-/// `end > off`, so each child's `off >= end > parent.off`: the descent's start
-/// offsets are strictly increasing. A strictly increasing sequence of
-/// non-negative integers all `< image.len()` has length `<= image.len()`, so the
-/// recursion depth is bounded and the walk always terminates — no depth cap, no
-/// visited-set, no possibility of looping on a malformed (cyclic) image.
-fn validate_dir(image: &[u8], off: usize, len: usize, forward_min: usize) -> Result<(), FsError> {
-    if off < forward_min {
-        return Err(FsError::DirNotForward); // cycle / back-edge / into the superblock
+/// **Two guarantees, two mechanisms.**
+///  - *Bounded work (no loop, no exponential blow-up).* `high_water` is monotone,
+///    so every directory table must start strictly after every table already
+///    validated: tables are globally disjoint and strictly forward-ordered. Each
+///    is therefore validated **exactly once** (a second entry pointing at an
+///    already-seen table — a cycle, back-edge, or a "diamond" DAG — has
+///    `off < *high_water` and trips `DirNotForward`), so total work is
+///    `O(image.len() / DIRENT_LEN)`, never exponential.
+///  - *Bounded depth (no stack overflow).* Global forward-ordering bounds depth by
+///    `image.len() / DIRENT_LEN`, which can still be tens of thousands for a large
+///    image — far past a 16 KiB stack. So `depth` is capped at `MAX_DEPTH`
+///    independently, turning a deep chain into a clean `TooDeep` error instead of
+///    a silent stack overflow.
+fn validate_dir(
+    image: &[u8],
+    off: usize,
+    len: usize,
+    high_water: &mut usize,
+    depth: usize,
+) -> Result<(), FsError> {
+    if depth > MAX_DEPTH {
+        return Err(FsError::TooDeep); // a crafted deep chain — do not overflow the stack
+    }
+    if off < *high_water {
+        return Err(FsError::DirNotForward); // cycle / back-edge / superblock / re-seen table (DAG)
     }
     if len % DIRENT_LEN != 0 {
         return Err(FsError::BadDirLength); // not a whole array of entries
@@ -250,6 +278,8 @@ fn validate_dir(image: &[u8], off: usize, len: usize, forward_min: usize) -> Res
     if end > image.len() {
         return Err(FsError::EntryOutOfBounds);
     }
+    *high_water = (*high_water).max(end); // this table is now consumed; nothing may reuse it
+
     for i in 0..(len / DIRENT_LEN) {
         let base = off + i * DIRENT_LEN;
         let c_off = read_u32_le(image, base + ENT_OFFSET) as usize;
@@ -260,7 +290,7 @@ fn validate_dir(image: &[u8], off: usize, len: usize, forward_min: usize) -> Res
         }
         match read_u32_le(image, base + ENT_KIND) {
             KIND_FILE => {} // a file's region only has to be in-bounds
-            KIND_DIR => validate_dir(image, c_off, c_len, end)?, // child must be >= this region's end
+            KIND_DIR => validate_dir(image, c_off, c_len, high_water, depth + 1)?,
             _ => return Err(FsError::BadKind),
         }
     }
@@ -469,9 +499,56 @@ pub fn self_test() {
     bad_kind[kind0..kind0 + 4].copy_from_slice(&99u32.to_le_bytes());
     assert_eq!(Fs::mount(&bad_kind).err(), Some(FsError::BadKind));
 
+    // A forward chain of directories deeper than MAX_DEPTH must be rejected
+    // (`TooDeep`) rather than recurse until the stack overflows.
+    let deep = {
+        let levels = MAX_DEPTH + 2;
+        let total = SUPERBLOCK_LEN + levels * DIRENT_LEN + 1;
+        let mut img = Vec::with_capacity(total);
+        img.extend_from_slice(&MAGIC);
+        img.extend_from_slice(&VERSION.to_le_bytes());
+        img.extend_from_slice(&1u16.to_le_bytes()); // root has 1 entry
+        img.extend_from_slice(&(total as u32).to_le_bytes());
+        img.extend_from_slice(&0u32.to_le_bytes());
+        for k in 0..levels {
+            if k == levels - 1 {
+                write_entry(&mut img, "d", (total - 1) as u32, 1, KIND_FILE); // tail: a 1-byte file
+            } else {
+                let next = SUPERBLOCK_LEN + (k + 1) * DIRENT_LEN;
+                write_entry(&mut img, "d", next as u32, DIRENT_LEN as u32, KIND_DIR);
+            }
+        }
+        img.push(0u8);
+        img
+    };
+    assert_eq!(Fs::mount(&deep).err(), Some(FsError::TooDeep));
+
+    // A "diamond": two root entries pointing at the *same* child table. The
+    // high-water rule rejects the second (`DirNotForward`), so mount validates
+    // each table once — no exponential re-validation, no hang.
+    let diamond = {
+        let child = SUPERBLOCK_LEN + 2 * DIRENT_LEN; // 80
+        let data = child + 2 * DIRENT_LEN; // 144
+        let total = data + 1;
+        let mut img = Vec::with_capacity(total);
+        img.extend_from_slice(&MAGIC);
+        img.extend_from_slice(&VERSION.to_le_bytes());
+        img.extend_from_slice(&2u16.to_le_bytes()); // root has 2 entries
+        img.extend_from_slice(&(total as u32).to_le_bytes());
+        img.extend_from_slice(&0u32.to_le_bytes());
+        write_entry(&mut img, "a", child as u32, (2 * DIRENT_LEN) as u32, KIND_DIR);
+        write_entry(&mut img, "b", child as u32, (2 * DIRENT_LEN) as u32, KIND_DIR);
+        write_entry(&mut img, "x", data as u32, 1, KIND_FILE);
+        write_entry(&mut img, "y", data as u32, 1, KIND_FILE);
+        img.push(0u8);
+        img
+    };
+    assert_eq!(Fs::mount(&diamond).err(), Some(FsError::DirNotForward));
+
     crate::serial_println!(
         "[ok] fs: mounted a v2 tree ({} root entries incl. docs/), read /docs/filesystem.txt \
-         byte-for-byte, secret unreachable, 8 corrupt images rejected (incl. a cycle, no hang)",
+         byte-for-byte, secret unreachable, 10 corrupt images rejected (cycle, deep chain, and \
+         diamond DAG among them -- no hang, no stack overflow)",
         root.len()
     );
     crate::serial_println!("M11: filesystem online");
