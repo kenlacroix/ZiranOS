@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ziran OS — a real session (recording)</title>
+  <style>
+    :root { --bg:#0b0e14; --fg:#e6e9ef; --dim:#8b93a7; --accent:#89b4fa; --green:#a6e3a1; --line:#232838; }
+    * { box-sizing:border-box; }
+    body { margin:0; padding:1.25rem; background:var(--bg); color:var(--fg);
+           font-family:system-ui,-apple-system,sans-serif; }
+    .wrap { max-width:860px; margin:0 auto; }
+    h1 { font-size:1.1rem; margin:.2rem 0 .3rem; }
+    p.note { color:var(--dim); font-size:.85rem; line-height:1.5; max-width:66ch; }
+    .badge { display:inline-block; font-size:.72rem; font-weight:600; letter-spacing:.03em;
+             color:var(--green); border:1px solid var(--green); border-radius:999px;
+             padding:.1rem .5rem; vertical-align:middle; }
+    a { color:var(--accent); }
+    .term-frame { margin-top:.8rem; border:1px solid var(--line); border-radius:10px; overflow:hidden;
+                  background:#05070c; box-shadow:0 10px 40px rgba(0,0,0,.4); }
+    .term-bar { display:flex; align-items:center; gap:.4rem; padding:.5rem .7rem; background:#0e1220;
+                border-bottom:1px solid var(--line); }
+    .term-bar .dot { width:11px; height:11px; border-radius:50%; background:#3a4152; }
+    .term-bar .t { margin-left:.5rem; color:var(--dim); font-size:.75rem;
+                   font-family:ui-monospace,Menlo,Consolas,monospace; }
+    pre#screen { margin:0; padding:.9rem 1rem; min-height:60vh; max-height:70vh; overflow:auto;
+                 font-family:ui-monospace,Menlo,Consolas,monospace; font-size:13px; line-height:1.45;
+                 color:#cfe3c8; white-space:pre-wrap; word-break:break-word; }
+    .cursor { display:inline-block; width:8px; height:1em; background:#cfe3c8; vertical-align:text-bottom;
+              animation:blink 1s steps(1) infinite; }
+    @keyframes blink { 50% { opacity:0; } }
+    .controls { display:flex; gap:.5rem; align-items:center; margin-top:.7rem; }
+    button { font:inherit; font-size:.85rem; color:var(--fg); background:#141a2a; border:1px solid var(--line);
+             border-radius:8px; padding:.4rem .8rem; cursor:pointer; }
+    button:hover { border-color:var(--accent); }
+    .controls .sp { color:var(--dim); font-size:.8rem; margin-left:auto; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Ziran OS — a real session <span class="badge">✓ REAL RECORDING</span></h1>
+    <p class="note">
+      This is a <b>recording of the actual kernel</b> — captured over the serial line from
+      <code>make console</code>, byte for byte with real timing. Not a reconstruction, not a mockup:
+      the boot log, the scheduler's tasks under <code>ps</code>, the live memory/uptime under
+      <code>mem</code>, and navigating the on-disk directory tree with <code>cd</code>/<code>ls</code>/<code>cat</code>
+      are all output the OS produced. <a href="./index.html">&larr; back to the guided tour</a>
+    </p>
+
+    <div class="term-frame">
+      <div class="term-bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span>
+        <span class="t">ziran-os — make console — serial</span></div>
+      <pre id="screen" aria-label="Ziran OS recorded session"></pre>
+    </div>
+
+    <div class="controls">
+      <button id="replay">↺ Replay</button>
+      <button id="speed">▸ 1×</button>
+      <span class="sp" id="clock">loading…</span>
+    </div>
+  </div>
+
+  <script>
+    // A tiny, dependency-free asciinema-v2 player. The .cast is real captured output
+    // (see the capture in the repo). No external assets — works under COOP/COEP.
+    var screenEl = document.getElementById('screen');
+    var clockEl  = document.getElementById('clock');
+    var speeds = [1, 2, 4, 0.5], si = 0;
+    var events = [], duration = 0;
+
+    function render(buf) {
+      // Process terminal control bytes we actually emit: \r (ignore — \n breaks lines),
+      // \b (erase one char). Everything else is literal text.
+      var out = [];
+      for (var i = 0; i < buf.length; i++) {
+        var c = buf[i];
+        if (c === '\r') continue;
+        if (c === '\b' || c === '\x7f') { out.pop(); continue; }
+        out.push(c);
+      }
+      screenEl.textContent = out.join('');
+      var cur = document.createElement('span'); cur.className = 'cursor';
+      screenEl.appendChild(cur);
+      screenEl.scrollTop = screenEl.scrollHeight;
+    }
+
+    var raf = null;
+    function play() {
+      if (raf) cancelAnimationFrame(raf);
+      var speed = speeds[si];
+      var t0 = performance.now(), idx = 0, buf = '';
+      screenEl.textContent = '';
+      (function step(now) {
+        var elapsed = (now - t0) / 1000 * speed;
+        while (idx < events.length && events[idx][0] <= elapsed) { buf += events[idx][2]; idx++; }
+        render(buf);
+        clockEl.textContent = Math.min(elapsed, duration).toFixed(1) + ' / ' + duration.toFixed(1) + ' s';
+        if (idx < events.length) { raf = requestAnimationFrame(step); }
+        else { clockEl.textContent = 'done · ' + duration.toFixed(1) + ' s'; }
+      })(t0);
+    }
+
+    fetch('ziran-session.cast').then(function (r) {
+      if (!r.ok) throw new Error('cast not found');
+      return r.text();
+    }).then(function (txt) {
+      var lines = txt.split('\n').filter(function (l) { return l.trim(); });
+      lines.shift(); // header
+      events = lines.map(function (l) { return JSON.parse(l); });
+      duration = events.length ? events[events.length - 1][0] : 0;
+      play();
+    }).catch(function (e) {
+      screenEl.textContent = '[could not load recording: ' + e.message + ']';
+      clockEl.textContent = '';
+    });
+
+    document.getElementById('replay').addEventListener('click', play);
+    document.getElementById('speed').addEventListener('click', function () {
+      si = (si + 1) % speeds.length;
+      this.textContent = '▸ ' + speeds[si] + '×';
+      play();
+    });
+  </script>
+</body>
+</html>

@@ -402,6 +402,7 @@
           <button class="btn primary" id="boot">▸ Boot</button>
           <button class="btn" id="restart">↺ Restart</button>
           <button class="btn" id="boot-real" hidden title="Runs real QEMU compiled to WebAssembly (~46 MB) to boot the actual 64-bit kernel — not a replay. Needs the qemu-wasm assets in web/ and cross-origin-isolation headers (make serve). See docs/planning/web-live-boot-qemu-wasm.md.">▸ Boot the real kernel (~46 MB)</button>
+          <a class="btn" href="replay.html" title="A real recording of the actual kernel captured over serial — boot, ps, mem, ls, cd, cat">▸ Watch a real session</a>
           <span class="badge" id="hint" style="align-self:center">click the screen, then type</span>
         </div>
       </div>
@@ -1041,35 +1042,16 @@ make debug      # boot frozen, attach GDB</code>
   // v86 is 32-bit and can't run our long-mode kernel; qemu-wasm can. Off until the
   // assets are built into web/ and verified in a browser (docs/planning/
   // web-live-boot-qemu-wasm.md). Flip QEMU_WASM_READY to true then.
+  // The live boot (real QEMU in WASM + xterm-pty) lives on its own page,
+  // qemu-wasm.html — it needs the ~46 MB assets built by web/build-qemu-wasm.sh.
+  // Hidden until QEMU_WASM_READY is flipped on (once the assets are staged).
   var QEMU_WASM_READY = false;
   (function(){
     var btn = $("boot-real");
     if(!btn) return;
     if(QEMU_WASM_READY) btn.hidden = false;
-    var started = false, live = false;
-    function line(t){
-      screenEl.appendChild(document.createTextNode(t + "\n"));
-      screenEl.scrollTop = screenEl.scrollHeight;
-      if(!live && t.indexOf("Ziran OS booted") >= 0){ live = true; badge.textContent = "live · real kernel"; }
-    }
     btn.addEventListener("click", function(){
-      if(started) return; started = true; btn.disabled = true;
-      badge.textContent = "loading real kernel…";
-      if(simTimer){ clearInterval(simTimer); simTimer = null; }
-      if(emulator && emulator.destroy){ try{ emulator.destroy(); }catch(e){} emulator = null; }
-      screenEl.innerHTML = "";
-      line("Loading real QEMU (WebAssembly)… first load is ~46 MB, one-time.");
-      var s = document.createElement("script");
-      s.src = "qemu-wasm-boot.js";
-      s.onload = function(){
-        self.ZiranQemuWasm.boot({
-          onLine: line,
-          onStatus: function(t){ badge.textContent = t; },
-          onError: function(e){ badge.textContent = "live boot failed"; line("[live boot] " + (e && e.message ? e.message : e)); }
-        });
-      };
-      s.onerror = function(){ badge.textContent = "live boot failed"; line("[live boot] could not load qemu-wasm-boot.js"); };
-      document.body.appendChild(s);
+      window.open("qemu-wasm.html", "_blank", "noopener");
     });
   })();
 
