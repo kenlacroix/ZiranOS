@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ziran OS — live in the browser (qemu-wasm)</title>
+  <!-- xterm.css vendored locally: COEP: require-corp blocks cross-origin CDN loads. -->
+  <link rel="stylesheet" href="./vendor/xterm.css">
+  <style>
+    body { background:#0b0e14; color:#cdd6f4; font-family:system-ui,sans-serif; margin:0; padding:1rem 1.25rem; }
+    h1 { font-size:1.05rem; margin:.2rem 0; }
+    p.note { opacity:.75; font-size:.85rem; max-width:70ch; line-height:1.5; }
+    code { color:#a6e3a1; } a { color:#89b4fa; }
+    #terminal { height:78vh; margin-top:.5rem; }
+    #status { font-size:.8rem; opacity:.6; margin-top:.4rem; }
+  </style>
+</head>
+<body>
+  <h1>Ziran OS — the real 64-bit kernel, live in your browser</h1>
+  <p class="note">
+    This is real <b>QEMU compiled to WebAssembly</b> booting <code>ziran.iso</code> —
+    not a replay. First load pulls ~46 MB (one-time). When the <code>ziran:/&gt;</code>
+    prompt appears, type: <code>help</code> · <code>ps</code> · <code>mem</code> ·
+    <code>ls</code> · <code>cd docs</code> · <code>cat filesystem.txt</code>.
+    <a href="./index.html">&larr; back to the guided tour</a>
+  </p>
+  <div id="terminal"></div>
+  <div id="status">loading…</div>
+
+  <!-- file_packager's loader: populates the global Module with the packaged FS
+       (QEMU's pc-bios + our ziran.iso, both under pack/). Must run before out.js. -->
+  <script src="./load.js"></script>
+  <script type="module">
+    // Vendored locally (see build-qemu-wasm.sh) so they load under COEP.
+    import './vendor/xterm.js';       // provides window.Terminal
+    import './vendor/xterm-pty.js';   // provides window.openpty
+    import initEmscriptenModule from './out.js';  // MODULARIZE default export
+
+    const status = (t) => { document.getElementById('status').textContent = t; };
+
+    // load.js populated the global `Module` with the preloaded filesystem; augment it.
+    window.Module = window.Module || {};
+    Module['arguments'] = [
+      '-nographic',                 // no display; routes the first serial (COM1) to the pty
+      '-m', '128M',
+      '-L', 'pack/',                // QEMU firmware dir (pc-bios), packaged into out.data
+      '-cdrom', 'pack/ziran.iso',   // our bootable image, packaged into out.data
+      '-accel', 'tcg,tb-size=500',  // software emulation — the browser has no KVM
+      '-no-reboot',
+    ];
+
+    const term = new Terminal({ cols: 100, rows: 32, convertEol: true });
+    term.open(document.getElementById('terminal'));
+    term.focus();
+
+    // xterm-pty bridges xterm.js <-> the guest's stdio (our serial console). Because
+    // the kernel reads input over serial too, this makes the shell INTERACTIVE.
+    const { master, slave } = openpty();
+    term.loadAddon(master);
+    Module['pty'] = slave;
+    Module['mainScriptUrlOrBlob'] = new URL('out.js', location.href).href;
+    Module['setStatus'] = (t) => { if (t) status(t); };
+    Module['onExit'] = () => status('guest halted.');
+
+    status('starting QEMU (WebAssembly)…');
+    (async () => {
+      await initEmscriptenModule(Module);
+      // Poll shim from the qemu-wasm sample — keeps keystrokes responsive.
+      if (Module['TTY'] && Module['TTY'].stream_ops) {
+        const oldPoll = Module['TTY'].stream_ops.poll;
+        Module['TTY'].stream_ops.poll = (stream) => oldPoll.call(stream, 0);
+      }
+      status('running — click the terminal and type.');
+    })().catch((e) => { status('boot error: ' + e); term.write('\r\n[boot error] ' + e + '\r\n'); console.error(e); });
+  </script>
+</body>
+</html>

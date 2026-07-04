@@ -41,66 +41,104 @@ nanokrnl <https://www.msuiche.com/posts/nanokrnl-cold-boot-fast-boot/>.
   publish.
 - **Verification is browser-only** — none of the boot can be checked headlessly.
 
-## How it wires up
+## How it wires up (the real API, from ktock/qemu-wasm-sample)
 
-The scaffold in this repo:
+The generated build is a MODULARIZE Emscripten module, and serial goes through
+**xterm-pty** (a PTY bridge for xterm.js), NOT `Module.print`. Because our kernel
+also *reads* input over serial (the serial console), xterm-pty makes the shell
+**interactive** in the browser. The scaffold in this repo:
 
 - `web/serve.py` (`make serve`) — the COOP/COEP dev server. **Verified working.**
-- `make web` now also stages **`web/ziran.iso`** (what qemu-wasm boots), alongside
-  the existing `kernel.bin`/`kernel-v86.bin`.
-- `web/qemu-wasm-boot.js` — a self-contained integration module (the code you
-  iterate on in the browser). It: builds the Emscripten `Module`, points QEMU at
-  the ISO, and pipes the guest serial to a callback the page renders.
-- `web/index.html` — a lazy-load **"Boot the real kernel (~46 MB)"** button, gated
-  behind `QEMU_WASM_READY` (default `false`). It fetches the assets, runs
-  `qemu-wasm-boot.js`, and — as the existing `realBoot()` already does — only
-  flips the badge to **live** when the real `Ziran OS booted…` serial marker
-  appears. Until then the page is the honest reconstruction.
+- `make web` stages **`web/ziran.iso`** (packaged into the emulator's FS at build).
+- **`web/build-qemu-wasm.sh`** — turnkey build: clones the patched QEMU, runs the
+  two Docker builds, `emmake`s `qemu-system-x86_64` to WASM, packages QEMU's
+  pc-bios **and** our ISO with `file_packager`, and stages
+  `web/{out.js,out.wasm,out.worker.js,out.data,load.js}` + vendored xterm/xterm-pty.
+- **`web/qemu-wasm.html`** — the dedicated live-boot page. Mirrors the sample's
+  working wiring exactly (load.js → out.js MODULARIZE → xterm + xterm-pty →
+  `Module.pty = slave`), but with our QEMU args (`-cdrom pack/ziran.iso -L pack/
+  -nographic -accel tcg`). This is the page you open and iterate.
+- `web/index.html` — a **"Boot the real kernel (~46 MB)"** button, hidden behind
+  `QEMU_WASM_READY` (default `false`); when flipped on it opens `qemu-wasm.html`.
 
-The Emscripten shape (see `qemu-wasm-boot.js` for the real code):
+The Emscripten shape (see `qemu-wasm.html` for the real code):
 
 ```js
-const Module = {
-  arguments: [
-    "-machine", "q35", "-m", "128M",
-    "-cdrom", "ziran.iso",          // staged by `make web`, written into the FS in preRun
-    "-serial", "stdio",             // Emscripten pipes guest COM1 -> Module.print
-    "-nographic",
-  ],
-  print:    (line) => onSerialLine(line),   // <- the page renders these
-  printErr: (line) => onSerialLine(line),
-  locateFile: (p) => p,                     // assets sit next to index.html
-  preRun: [() => Module.FS.writeFile("/ziran.iso", isoBytes)],  // isoBytes fetched first
-};
-// then load the generated glue:  <script src="qemu-system-x86_64.js"></script>
+import initEmscriptenModule from './out.js';   // MODULARIZE default export
+import './vendor/xterm.js'; import './vendor/xterm-pty.js';
+window.Module.arguments = ['-nographic','-m','128M','-L','pack/',
+                           '-cdrom','pack/ziran.iso','-accel','tcg,tb-size=500'];
+const term = new Terminal(); term.open(el);
+const { master, slave } = openpty(); term.loadAddon(master);
+Module.pty = slave;                             // guest stdio <-> the terminal
+await initEmscriptenModule(Module);             // load.js (script) ran first, preloading the FS
 ```
 
-## Getting the ~46 MB assets
+## Getting the ~46 MB assets — run the build script
 
-They are **not** committed (see `.gitignore`). Two ways to obtain
-`qemu-system-x86_64.{js,wasm,worker.js,data}` and drop them in `web/`:
+No prebuilt exists. `web/build-qemu-wasm.sh` automates the
+`ktock/qemu-wasm-sample` flow, trimmed to our ISO. **Heavy and slow** — it
+compiles a patched QEMU (`ktock/qemu-wasm`, Wasm-backend patch tracked in that
+repo's PR #21) to WebAssembly. On **Apple Silicon** the Emscripten Docker images
+are x86_64 and run under emulation, so budget hours; a fast x86_64 Linux box is
+far better. Needs `docker` (daemon up), `git`, `curl`, and `build/ziran.iso`.
 
-1. **Prebuilt** — check `ktock/qemu-wasm-sample`'s releases/CI artifacts for a
-   ready `x86_64` build; copy the four files into `web/`.
-2. **Build from source** — `ktock/qemu-wasm` ships a Dockerfile:
-   `docker build` the `qemu-system-x86_64` Emscripten target, then extract the
-   generated files. (This is the container2wasm toolchain; expect a long build.)
+```sh
+make web                # stage build/ziran.iso (macOS: add the x86_64-elf- flags)
+./web/build-qemu-wasm.sh
+```
 
-Confirm the exact asset filenames the build emits and, if they differ, update the
-`ASSETS` list in `qemu-wasm-boot.js` and the `.gitignore` globs.
+It stages `web/{out.js,out.wasm,out.worker.js,out.data,load.js,vendor/}` (all
+gitignored). The script checks out the Wasm-backend branch itself
+(`QEMU_WASM_BRANCH`, default `dev-wasm-j`; the code lives there, not on `master`)
+and repoints zlib from the dead `zlib.net` pin to GitHub's mirror.
+
+### Build on a native x86_64 Linux box (recommended)
+
+**Do not build on Apple Silicon.** Observed there: the Emscripten toolchain images
+are x86_64, so they run under emulation — zlib's `configure` alone took ~8 minutes,
+and Docker's VM then died mid-build (`error reading from server: EOF`) under the
+memory pressure of the parallel emulated dep builds. A **native x86_64 Linux host
+with plenty of RAM fixes both**: the toolchain runs natively, and native Docker
+uses host RAM directly (no Desktop VM cap). A slow CPU only makes it *longer*, not
+*fail*.
+
+Requirements: **x86_64** (`uname -m` → `x86_64`; ARM would emulate too), Docker
+(daemon running — if building *inside* a container, it needs docker-in-docker or
+the host docker socket), `git`, `curl`.
+
+```sh
+# deps (Debian/Ubuntu): docker.io git curl + the ISO toolchain, native names:
+#   nasm binutils grub-pc-bin grub-common xorriso  + rustup
+rustup target add x86_64-unknown-none
+git clone <repo> ziran && cd ziran && git checkout claude/ziran-os-plan-qgobid
+make web                     # native ld/objcopy/grub-mkrescue — NO x86_64-elf- prefixes on Linux
+./web/build-qemu-wasm.sh     # long on a slow CPU, but it completes
+```
+
+(No Rust on the box? Skip `make web` and `scp` your Mac's `build/ziran.iso` over —
+that ISO file is the only input the build needs.) Then either serve/deploy from the
+box, or copy the assets back to a workstation:
+
+```sh
+rsync -a box:ziran/web/{out.js,out.wasm,out.worker.js,out.data,load.js,vendor/} web/
+make serve   # open http://localhost:8000/qemu-wasm.html
+```
 
 ## Finish it (in a browser — the part that needs eyes)
 
-1. Obtain the qemu-wasm assets into `web/` (above).
-2. `make web` (stages `web/ziran.iso`), then `make serve`.
-3. Open `http://localhost:8000`, click **"Boot the real kernel"**.
-4. Iterate `qemu-wasm-boot.js` until the guest serial appears — the exact QEMU
-   `-machine`/`-serial` flags, the FS path for the ISO, and how the glue exposes
-   `print`/`FS` are the knobs. The `qemu-wasm-sample` `module.js` is the reference.
-5. Success = the page sees `Ziran OS booted…` on serial and the badge flips to
-   **live · real kernel** on its own. Then set `QEMU_WASM_READY = true`.
-6. For hosting, add a Netlify/Cloudflare `_headers` file with the two COOP/COEP
-   headers so the live boot works off localhost.
+1. `./web/build-qemu-wasm.sh` (above) — produces the assets.
+2. `make serve`, open **`http://localhost:8000/qemu-wasm.html`**.
+3. It should boot to `ziran:/>`. Click the terminal and type `ps` / `ls` /
+   `cd docs` / `cat filesystem.txt` — interactive, over real emulated serial.
+4. Knobs if it doesn't: the QEMU args in `qemu-wasm.html` (`-machine`, `-accel`,
+   whether the ISO wants `-cdrom` vs `-drive`), and the xterm-pty poll shim.
+   `ktock/qemu-wasm-sample`'s `samples/module.js` + `samples/index.html` are the
+   reference.
+5. When it boots, set `QEMU_WASM_READY = true` in `index.html` so the tour's
+   "Boot the real kernel" button appears and links here.
+6. To host it, the server must send the two COOP/COEP headers (a Netlify/Cloudflare
+   `_headers` file, or your own server) — plain GitHub Pages can't.
 
 ## Then — the realness follow-ons (only meaningful once live)
 
