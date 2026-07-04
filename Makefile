@@ -84,7 +84,7 @@ ifeq ($(PROFILE),debug)
     CARGO_FLAGS :=
 endif
 
-.PHONY: all iso run console run-headless debug gdb clean check-header web serve
+.PHONY: all iso run console run-headless debug gdb clean check-header web serve web-test
 
 all: $(KERNEL)
 
@@ -181,6 +181,12 @@ web: $(KERNEL) $(ISO)
 # Serve web/ with the cross-origin isolation headers the live qemu-wasm boot needs.
 serve: web
 	cd web && python3 serve.py
+
+# End-to-end test of the live qemu-wasm boot in headless Chrome (needs Chrome and
+# the built assets: ./web/build-qemu-wasm.sh + make web). Boots qemu-wasm.html,
+# waits for the ziran:/> prompt, drives `ps`. The check native -kernel can't do.
+web-test:
+	python3 web/browser-test.py
 
 clean:
 	cargo clean

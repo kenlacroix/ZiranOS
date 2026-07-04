@@ -101,9 +101,10 @@ levels of realness, each labelled honestly:
 - **a genuine live boot** — real QEMU compiled to WebAssembly
   (`web/build-qemu-wasm.sh`) booting the actual 64-bit kernel (via `-kernel`) in the
   tab. This **works** — verified booting to an interactive `ziran:/>` shell in a
-  browser (and it flushed out two latent boot bugs along the way). The "Boot the
-  real kernel" button is live; the ~17 MB of assets just aren't publicly **hosted**
-  yet — run it now with `make serve` (or self-host).
+  browser, both by hand and by an automated headless-Chrome test (`make web-test`),
+  and it flushed out two latent boot bugs along the way. The "Boot the real kernel"
+  button is live; the ~17 MB of assets just aren't publicly **hosted** yet — run it
+  now with `make serve` (or self-host).
 
 Hosting is written up in [`docs/DEPLOY.md`](docs/DEPLOY.md) (Cloudflare Pages; with
 the `.data` now trimmed to ~0.5 MB the whole thing fits under Pages' 25 MB/file cap,
