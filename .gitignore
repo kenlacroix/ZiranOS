@@ -21,6 +21,11 @@
 /web/qemu-system-x86_64.*
 /web/vendor/
 
+# Tier-2 CTF exploit recipe (kept out of the public repo so the live challenge
+# isn't pre-solved for a reader/scraper; the *concept* stays public, the concrete
+# per-session recipe does not). Author's private operational note.
+/ctf-server/*.private.md
+
 # Editor / OS noise
 .DS_Store
 *.swp

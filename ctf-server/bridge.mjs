@@ -12,8 +12,9 @@
 // real blast-radius wall; these controls keep one host from being overwhelmed.
 //
 // The flag is a per-session secret passed via QEMU `-fw_cfg opt/flag` (never a shell
-// line, never in the repo). TODO(kernel): read opt/flag at boot + the trusted-length
-// OOB read; against today's kernel this boots and pipes serial, ignoring the flag.
+// line, never in the repo). The kernel reads it at boot and plants it behind a
+// per-session gap on `load`; a captured flag is verified here by sha256 over the
+// control channel (see handleControl), and a committed honeytoken is logged.
 //
 //   node bridge.mjs        (config via env — see CONFIG)
 // Requires `npm i` (ws) and qemu-system-x86_64 on PATH.
@@ -21,8 +22,26 @@
 import { WebSocketServer } from 'ws';
 import { createServer } from 'node:http';
 import { spawn, spawnSync } from 'node:child_process';
-import { randomBytes, randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
+
+const sha256 = (s) => createHash('sha256').update(s).digest('hex');
+
+// Control-channel framing. A client message is normally raw serial (keystrokes /
+// pasted image). A *control* frame — today only a flag submission — is a binary WS
+// message prefixed with these 4 bytes; the kernel never emits them over serial (it
+// prints only ASCII, so a NUL is at most a lone padding byte, never NUL+"CTL"), so
+// the prefix cleanly separates control from console traffic in both directions.
+const CTL = Buffer.from('\x00CTL');
+
+// Honeytoken — a *committed, fixed* decoy flag (see web/ctf-remote.html, where it is
+// planted in the page source as bait for scrapers). It is never minted and never
+// leaks from a running instance, so the only way to submit it is to have grepped the
+// repo / page instead of landing the exploit. Submitting it is rejected AND logged:
+// a tripwire that yields signal (someone took the shortcut), not secrecy. The real
+// per-session flag is unaffected — a genuine solver captures it regardless.
+const HONEYTOKEN = 'FLAG{ziran-tier2-000000000000d0cy}';
+const HONEYTOKEN_HASH = sha256(HONEYTOKEN);
 
 const int = (v, d) => (v === undefined ? d : Number(v));
 const CONFIG = {
@@ -177,11 +196,28 @@ wss.on('connection', async (ws, req) => {
   livePerIp.set(ip, (livePerIp.get(ip) ?? 0) + 1);
   spawnTimes.push(Date.now());
   const flag = mintFlag();
+  const flagHash = sha256(flag);   // verify by hash: the plaintext flag is never stored/logged
   const qemu = spawnQemu(flag);
   log(`spawned (flag=${flag.slice(0, 18)}…), live=${metrics.live}`);
 
   let inBytes = 0;
   const kill = () => { try { qemu.kill('SIGKILL'); } catch {} };
+
+  // Send a control frame to the client (CTL-prefixed so the terminal doesn't render it).
+  const sendCtl = (obj) => {
+    try { if (ws.readyState === ws.OPEN) ws.send(Buffer.concat([CTL, Buffer.from(JSON.stringify(obj))])); } catch {}
+  };
+  // A flag submission arrives on the control channel and is checked by hash against
+  // this session's flag (and the committed honeytoken). We never compare or log the
+  // plaintext flag; the honeytoken path is logged as a shortcut-taker tripwire.
+  const handleControl = (jsonBuf) => {
+    let msg; try { msg = JSON.parse(jsonBuf.toString('utf8')); } catch { return; }
+    if (msg?.type !== 'submit' || typeof msg.flag !== 'string') return;
+    const h = sha256(msg.flag.trim());
+    if (h === flagHash) { log('submit: CORRECT'); sendCtl({ type: 'verify', result: 'correct' }); }
+    else if (h === HONEYTOKEN_HASH) { log('submit: HONEYTOKEN (shortcut/scrape — rejected)'); sendCtl({ type: 'verify', result: 'honeytoken' }); }
+    else { log('submit: incorrect'); sendCtl({ type: 'verify', result: 'incorrect' }); }
+  };
 
   // hard lifetime + idle timers
   const hardTimer = setTimeout(() => {
@@ -212,6 +248,12 @@ wss.on('connection', async (ws, req) => {
   ws.on('message', (data, isBinary) => {
     bumpIdle();
     const buf = isBinary ? data : Buffer.from(data.toString());
+    // Control channel (CTL-prefixed binary): a flag submission, not console input.
+    // It never reaches the guest and doesn't count against the serial input cap.
+    if (buf.length >= CTL.length && buf.subarray(0, CTL.length).equals(CTL)) {
+      handleControl(buf.subarray(CTL.length));
+      return;
+    }
     inBytes += buf.length;
     if (inBytes > CONFIG.MAX_IN_BYTES) {
       log('killed: input cap'); kill(); try { ws.close(1009, 'input limit'); } catch {}

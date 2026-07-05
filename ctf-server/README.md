@@ -17,16 +17,27 @@ browser  ──wss──▶  Cloudflare Tunnel  ──▶  bridge.mjs  ──spa
 
 ## Status
 
-Runnable skeleton. Transport + lifecycle + limits are complete and will boot today's
-kernel and pipe its serial. **Two pieces are still to build** before it's a real
-capture (both tracked in `docs/planning/ctf-eng-plan.md`):
+Live. Transport + lifecycle + limits boot the kernel and pipe its serial; the kernel
+reads the per-session flag from QEMU `fw_cfg` `opt/flag` at boot and plants it outside
+the player's uploaded bytes, so a landed exploit reads a secret that was never in any
+bytes the player was given (the real, uncheatable capture). The client
+(`web/ctf-remote.html`) points at `wss://ctf.kennethlacroix.me/`.
 
-1. **Kernel:** read the per-session flag from QEMU `fw_cfg` `opt/flag` at boot and
-   plant it as the hidden secret; add the **trusted-length OOB read** vuln (Tier 1's
-   in-image aliasing isn't strong enough — the secret must sit outside the player's
-   bytes). See eng-plan §3.3 / §0.
-2. **Client:** point the CTF page's WebSocket at `wss://<your-host>/` for a "remote"
-   mode (the local Tier-1 sandbox stays as the practice target).
+Anti-cheat / difficulty, layered on top of the server-side-secret wall:
+
+- **Verify by hash.** A captured flag is submitted over a control channel and checked
+  server-side with `sha256`, keyed to the session (bridge `handleControl`). The
+  plaintext flag is never stored or logged.
+- **Honeytoken tripwire.** A fixed, public decoy (`HONEYTOKEN`) is planted as bait in
+  the client page. Submitting it proves a shortcut (grep/scrape) rather than a capture
+  — rejected and logged, never accepted.
+- **Per-session flag offset.** The flag sits behind a per-session gap folded from the
+  flag itself; `load` discloses the offset for *this* instance. A memorized or copied
+  offset misses — the exploit must target the live session.
+
+The concrete per-session exploit recipe is intentionally **not committed** (see
+`.gitignore`) so the live challenge isn't pre-solved for a reader; the concept lives
+in `docs/planning/ctf-eng-plan.md` §0/§3, the recipe in the operator's private note.
 
 ## What you need on Proxmox
 
