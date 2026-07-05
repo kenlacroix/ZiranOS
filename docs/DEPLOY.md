@@ -85,15 +85,26 @@ includes the gitignored assets a git-connected deploy can't see (that is exactly
 why `/qemu-wasm` renders text but never boots the kernel):
 
 ```sh
-./web/build-qemu-wasm.sh        # once, to produce the assets (heavy; see that script)
-make deploy-web                 # = npx wrangler pages deploy web --project-name=ziranos
+./web/build-qemu-wasm.sh        # once, to produce the qemu-wasm assets (heavy; see that script)
+make redeploy-web               # rebuild the browser kernel from source, then upload
 ```
 
-`make deploy-web` needs Node and a one-time `wrangler login`; override the project
-name with `CF_PAGES_PROJECT=yourname`. **Caveat:** a later `git push` to a
-git-connected Pages project redeploys *without* the assets (they're gitignored), so
-after any push you want live, re-run `make deploy-web` — or make Pages
-direct-upload-only so the two don't fight.
+**Use `make redeploy-web`, not `make deploy-web`, when the kernel changed.**
+`web/kernel-v86.bin` (the binary the live boot runs via `-kernel`) is a **gitignored
+build artifact** — pulling source does *not* refresh it, and `deploy-web` only
+uploads what's on disk. So a plain `deploy-web` silently ships a **stale kernel**
+(e.g. an M12 build with no `load` command, even though the source has it).
+`redeploy-web` first runs `stage-web-kernel` (ELF → `objcopy` → `kernel-v86.bin`;
+no GRUB/ISO needed), then deploys — so it can't ship an old kernel. `deploy-web`
+now also refuses to run if `kernel-v86.bin` is missing entirely.
+
+The toolchain auto-detects by OS (macOS → the `x86_64-elf-` cross-binutils), so no
+`LD=…`/`OBJCOPY=…` flags are needed; override on the command line if your setup
+differs. `redeploy-web` needs Node + a one-time `wrangler login`; set the project
+with `CF_PAGES_PROJECT=yourname`. **Caveat:** a later `git push` to a git-connected
+Pages project redeploys *without* the assets (they're gitignored), so after any push
+you want live, re-run `make redeploy-web` — or make Pages direct-upload-only so the
+two don't fight.
 
 ## Notes
 
