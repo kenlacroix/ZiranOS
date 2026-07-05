@@ -52,8 +52,18 @@ reach your LAN**. So the control is a firewall rule, not just a separate NIC:
 - Either way, `nftables.conf` here re-applies the **deny-LAN** policy *inside* the VM
   as defense in depth. Edit its `GATEWAY`/`LAN` vars to match your homelab.
 
-A fully-isolated bridge with no uplink won't work — the tunnel needs to reach
-Cloudflare. The point is "WAN yes, LAN no," which the firewall does.
+A fully-isolated bridge with no uplink won't work on its own — the tunnel needs to
+reach Cloudflare. The point is "WAN yes, LAN no," which the firewall does.
+
+**Flat network (no VLANs)?** Then don't put the VM on `vmbr0` — that drops it onto
+your LAN's L2 segment (adjacent to every host, one firewall typo from exposure).
+Instead use **`proxmox-host-nat.conf`**: an internal-only bridge `vmbr1` (no uplink)
+with the VM alone on a private subnet, and the **Proxmox host NATs it to the internet
+while dropping all forwarding to LAN ranges**. That gives true L2 isolation *and*
+outbound internet for the tunnel — a breakout lands on an island whose only exit is
+WAN. Append that file's stanza to `/etc/network/interfaces` on the host, `ifreload
+-a`, and verify from the VM that `curl https://cloudflare.com` works but a `ping` to
+your NAS times out.
 
 ## Install
 
