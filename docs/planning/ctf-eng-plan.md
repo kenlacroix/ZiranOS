@@ -42,18 +42,21 @@ different vulnerability classes, and conflating them is the trap:
 - **Tier 2 must put the secret outside the player's bytes.** For a real capture,
   the flag can never be in anything the player receives — it lives only in the
   **server** process's memory. That forces a *stronger* bug than in-image
-  aliasing: the mount validator must trust an **attacker-controlled length**
-  (the image header's `total_size`) over the **real backing-buffer length**, so
-  a crafted extent reads past the player's uploaded bytes into an adjacent
-  server-side allocation where the flag was placed. The player uploads a small
-  image, declares a large `total_size`, and points an extent into the flag.
+  aliasing: the mount validator has to trust a length the **attacker controls**
+  rather than the real backing length, so a crafted extent can read past what the
+  player uploaded into server-side bytes they were never given.
 
-This distinction is the whole plan. Tier 1 reuses the M16 seed as-is. Tier 2
-requires deliberately engineering a heap-adjacent, out-of-buffer read — a
-*different, more powerful* vulnerability — and doing so in a way that is
-deterministic and reachable (see §3.4 honest unknowns; naive Rust slicing
-*panics* rather than reading OOB, so the flag and the mounted image must share
-one real backing allocation).
+  > **Redacted on purpose.** The concrete Tier-2 layout, offsets, and crafted-image
+  > parameters are **not in this repo** — they live in a private operator note
+  > (`ctf-server/*.private.md`, git-ignored) so a reader/scraper can't lift the
+  > answer to the *live* challenge. The vulnerability *class* (a bounds check that
+  > trusts an attacker-supplied length) is the public lesson; the recipe is not.
+  > The live target also randomizes the flag's offset per session, so even the
+  > recipe only works against the instance you're actually on.
+
+This distinction is the whole plan. Tier 1 reuses the M16 seed as-is. Tier 2 is a
+*different, more powerful* vulnerability where the secret sits outside the player's
+bytes — the shape is sketched in §3.3; the specifics are in the private note.
 
 If Tier 2's cost (see §5) isn't worth it yet, **Tier 1 alone is a complete,
 shippable deliverable** — build it, launch it, and gate Tier 2 on traction.
@@ -209,28 +212,19 @@ as a gimmick. Point players who want a real capture at Tier 2.
 
 ### 3.3 Tier 2 — remote capture
 
-**The vulnerability (the design work):** escalate from in-image aliasing to a
-**trusted-length out-of-buffer read.** The server:
-1. Allocates the flag bytes into the kernel heap.
-2. Accepts the player's uploaded image via `load` into a heap buffer.
-3. The mount validator's *intended flaw*: it bounds extents against the image
-   header's self-declared `total_size` (attacker-controlled) rather than the
-   **actual decoded byte-length** of the uploaded buffer. A crafted extent with
-   `offset+length` inside the *claimed* `total_size` but beyond the *real* buffer
-   reads adjacent heap — where the flag was placed.
+**The vulnerability — specifics redacted.** Tier 2 escalates from in-image aliasing
+to a bug where the flag lives outside anything the player is handed: the mount
+validator trusts a length the **attacker supplies** (in the image header) instead of
+the real length of the buffer it actually has, so a crafted extent can read past the
+player's uploaded bytes into server-side memory where the per-session flag sits.
 
-The teachable bug: *you validated against a length from the data, not the length
-of the memory you actually have.* This is a real, common class (CVE-shaped), and
-it is distinct from — and strictly stronger than — the Tier-1 in-image alias.
-
-**The Rust wrinkle (honest unknown, §3.4):** a zero-copy `&buf[a..b]` with `b`
-past `buf.len()` **panics**, it does not read OOB. So the read must land inside a
-*real* allocation. The likely shape: the server builds one large backing buffer
-`[uploaded image bytes | padding | flag bytes]` and hands `mount` a *view/length*
-that the loose check fails to enforce, so extents range over the whole real
-buffer including the flag tail. Nailing the exact layout (single `Vec`, computed
-flag offset, deterministic adjacency, no ASLR to fight since it's our allocator)
-is build-phase work — see §3.4.
+The teachable *class* is public and is the whole lesson: *you validated against a
+length from the data, not the length of the memory you actually have* — a real,
+CVE-shaped bug, strictly stronger than the Tier-1 in-image alias. But the **concrete
+layout, exact offsets, and crafted-image parameters are deliberately kept out of this
+repo** (private operator note, `ctf-server/*.private.md`, git-ignored) so a
+reader/scraper can't lift the answer to the live target — which also randomizes the
+flag's offset per session. See §0's redaction note.
 
 **The bridge + spawner (host-side, no kernel change):**
 ```
@@ -259,10 +253,10 @@ QEMU (per-connection, ephemeral)  →  ziran kernel, serial only
 
 ### 3.4 Edge cases & honest unknowns
 
-- **[T2] The panic-vs-read wrinkle** (headline unknown). The OOB read must stay
-  within a real backing allocation or Rust panics instead of leaking. Resolve in
-  the build by fixing the allocation layout: flag and image in one buffer, loose
-  check gates the sub-range. Confirm the leak is deterministic across boots.
+- **[T2] The read must stay inside a real allocation** (a Rust wrinkle — a slice
+  past `buf.len()` panics rather than leaking). Resolved in the build; the exact
+  allocation layout lives in the private operator note. Confirm the leak is
+  deterministic across boots.
 - **[T2] Differential-capture proof** (Q4 gate). Must demonstrate the *same*
   crafted image captures the server flag but not a locally-seeded different flag —
   otherwise it's Tier 1 in disguise. Bake this into the verification, §3.5.
@@ -452,9 +446,10 @@ reasoning for the price of a coffee.
    attacker path.
 
 **Phase B — Tier 2 (gate on: Phase A shipped + a decision it's worth the ops):**
-5. **The trusted-length OOB read.** Engineer the flag-adjacent allocation and the
-   loose length check; prove the leak is deterministic and doesn't panic (the
-   §3.4 unknown). Differential self-test (server flag vs local flag).
+5. **The attacker-trusted-length read** (specifics in the private note). Build the
+   server-side flag placement + the loose length check; prove the leak is
+   deterministic and doesn't panic (the §3.4 unknown). Differential self-test
+   (server flag vs local flag).
 6. **The bridge + ephemeral spawner** (host-side, no kernel change): serial↔socket
    over WebSocket + raw TCP, per-connection QEMU, timeout/reap/concurrency/rate
    limits. Load-test it.
