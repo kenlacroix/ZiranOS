@@ -3,9 +3,28 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Ziran OS — Learn as it boots</title>
-</head>
-<body>
+<title>Ziran OS — boot a from-scratch 64-bit OS in your browser, and learn how it works</title>
+<meta name="description" content="A hand-written x86-64 hobby OS — assembly boot code, a no_std Rust kernel, its own interrupts, scheduler, and filesystem — bootable in your browser, with a predict-then-explain guided tour of every layer and a live capture-the-flag.">
+<link rel="canonical" href="https://ziranos.pages.dev/">
+<meta name="robots" content="index, follow">
+<meta name="author" content="Kenneth LaCroix">
+<meta name="theme-color" media="(prefers-color-scheme: light)" content="#e9ece9">
+<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0b1012">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Ziran OS">
+<meta property="og:url" content="https://ziranos.pages.dev/">
+<meta property="og:title" content="Ziran OS — boot a from-scratch 64-bit OS in your browser">
+<meta property="og:description" content="No Linux underneath: a hand-written kernel you can boot in the tab, a guided tour that asks you to predict what happens next, and a live CTF to break its filesystem.">
+<meta property="og:image" content="https://ziranos.pages.dev/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Ziran OS — a from-scratch operating system, explained while it runs">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Ziran OS — boot a from-scratch 64-bit OS in your browser">
+<meta name="twitter:description" content="A hand-written kernel bootable in the tab, a predict-then-explain tour of every layer, and a live filesystem CTF.">
+<meta name="twitter:image" content="https://ziranos.pages.dev/og.png">
 <style>
   :root {
     --paper:#e9ece9; --surface:#f6f7f5; --surface-2:#eef1ee;
@@ -340,6 +359,69 @@
   footer .mono{color:var(--ink)}
   @media (prefers-reduced-motion:reduce){.screen .cur{animation:none}}
 </style>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "WebSite",
+      "@id": "https://ziranos.pages.dev/#website",
+      "url": "https://ziranos.pages.dev/",
+      "name": "Ziran OS",
+      "description": "A from-scratch x86-64 hobby operating system, bootable in the browser and explained layer by layer.",
+      "author": { "@id": "https://ziranos.pages.dev/#author" }
+    },
+    {
+      "@type": "Person",
+      "@id": "https://ziranos.pages.dev/#author",
+      "name": "Kenneth LaCroix",
+      "url": "https://www.kennethlacroix.me"
+    },
+    {
+      "@type": "SoftwareSourceCode",
+      "name": "Ziran OS",
+      "description": "A hobbyist, from-scratch x86-64 operating system: hand-written Multiboot2 assembly, a no_std Rust kernel with its own interrupts, scheduler, shell, and filesystem, plus ring-3 userspace and two security milestones.",
+      "codeRepository": "https://github.com/kenlacroix/ZiranOS",
+      "programmingLanguage": ["Rust", "Assembly"],
+      "runtimePlatform": "x86-64 bare metal (QEMU)",
+      "author": { "@id": "https://ziranos.pages.dev/#author" },
+      "license": "https://github.com/kenlacroix/ZiranOS/blob/HEAD/LICENSE-MIT"
+    },
+    {
+      "@type": "FAQPage",
+      "mainEntity": [
+        {
+          "@type": "Question",
+          "name": "What am I actually looking at?",
+          "acceptedAnswer": { "@type": "Answer", "text": "Two things side by side: a little emulated computer with a green screen booting an operating system, and a guided tour that asks you to guess what happens next, then explains why. The OS is hand-written from scratch — no Windows, macOS, or Linux underneath it." }
+        },
+        {
+          "@type": "Question",
+          "name": "Is this a real operating system?",
+          "acceptedAnswer": { "@type": "Answer", "text": "It is a real kernel that boots itself, handles interrupts, schedules tasks preemptively, runs a shell, walks a filesystem with ls/cd/cat, and can drop a small program into ring-3 user mode with its own syscall. It deliberately lacks graphical windows, an app ecosystem, and real networking — it is a teaching kernel, not a daily driver." }
+        },
+        {
+          "@type": "Question",
+          "name": "Is it really running inside my browser?",
+          "acceptedAnswer": { "@type": "Answer", "text": "The green screen on the main page is a faithful reconstruction — the exact output the real kernel prints, replayed. But you can also boot the genuine 64-bit kernel live in the browser: the 'Boot the real kernel' button loads real QEMU compiled to WebAssembly and boots it to an interactive shell (a one-time ~17 MB download)." }
+        },
+        {
+          "@type": "Question",
+          "name": "Why build an operating system from scratch at all?",
+          "acceptedAnswer": { "@type": "Answer", "text": "To understand every layer instead of trusting it as magic. An OS is a stack of small, knowable mechanisms, each one something a person can hand-write and reason about. The goal is understanding, with a public trail of how it was built — including the dead ends and the bugs." }
+        },
+        {
+          "@type": "Question",
+          "name": "Can I try breaking it myself?",
+          "acceptedAnswer": { "@type": "Answer", "text": "Yes — the filesystem CTF boots the real kernel in your tab and challenges you to craft a disk image that makes the filesystem leak a flag it was built to hide: the exact exploit from milestone 16, in your hands." }
+        }
+      ]
+    }
+  ]
+}
+</script>
+</head>
+<body>
 
 <header class="top">
   <div class="wrap">
@@ -354,11 +436,12 @@
     <div class="hero">
       <div class="eyebrow">A from-scratch operating system, explained while it runs</div>
       <h1>Boot a real OS in this tab — then learn <em>how every layer works</em>.</h1>
-      <p class="lead">No Linux underneath. This is a hand-written kernel — assembly boot code, a <span class="mono">no_std</span> Rust core, its own interrupt and keyboard handling — running on a tiny PC emulator right here. The tour beside it asks you to guess what happens, then shows you why.</p>
+      <p class="lead">No Linux underneath. This is a hand-written kernel — assembly boot code, a <span class="mono">no_std</span> Rust core, its own interrupts, scheduler, and filesystem — bootable right here: a faithful reconstruction on the green screen, and the real 64-bit kernel one click away under QEMU-in-WebAssembly. The tour beside it asks you to guess what happens, then shows you why.</p>
       <div class="meta">
-        <span class="tag"><b>Milestones 0–12</b> booted</span>
-        <span class="tag">from <b>512 bytes</b> to a file manager</span>
+        <span class="tag"><b>Milestones 0–16</b> · roadmap complete</span>
+        <span class="tag">from <b>512 bytes</b> to a breakable OS</span>
         <span class="tag">every claim links to <b>real source</b></span>
+        <span class="tag">🚩 <a href="ctf.html" style="text-decoration:none">a live <b>CTF</b> to attack it</a></span>
       </div>
     </div>
   </div>
@@ -413,7 +496,7 @@
         <div class="controls">
           <button class="btn primary" id="boot">▸ Boot</button>
           <button class="btn" id="restart">↺ Restart</button>
-          <button class="btn" id="boot-real" hidden title="Runs real QEMU compiled to WebAssembly (~46 MB) to boot the actual 64-bit kernel — not a replay. Needs the qemu-wasm assets in web/ and cross-origin-isolation headers (make serve). See docs/planning/web-live-boot-qemu-wasm.md.">▸ Boot the real kernel (~46 MB)</button>
+          <a class="btn" id="boot-real" href="qemu-wasm.html" target="_blank" rel="noopener" title="Runs real QEMU compiled to WebAssembly to boot the actual 64-bit kernel to an interactive shell — not a replay. One-time ~17 MB download.">▸ Boot the real kernel (~17 MB)</a>
           <a class="btn" href="replay.html" title="A real recording of the actual kernel captured over serial — boot, ps, mem, ls, cd, cat">▸ Watch a real session</a>
           <a class="btn" href="ctf.html" title="Craft a filesystem image and make the running kernel leak a hidden flag — the Tier-1 CTF, live in your browser">🚩 Filesystem CTF</a>
           <span class="badge" id="hint" style="align-self:center">click the screen, then type</span>
@@ -456,7 +539,7 @@
   <section class="section">
     <div class="grid2">
       <div class="panel">
-        <h3>Where this is going</h3>
+        <h3>The roadmap — complete</h3>
         <ol class="road" id="road"></ol>
       </div>
       <div class="panel run">
@@ -467,9 +550,9 @@ make run        # boot it in a QEMU window
 make debug      # boot frozen, attach GDB</code>
         <p>Then read the source and the concept docs, and follow the milestone build-log. Each milestone is one working state and one honest write-up — including what broke.</p>
         <div class="links" style="border:none;padding:0;margin-top:14px">
-          <a id="lk-repo" href="#"><span class="ic">▸</span> the repository</a>
-          <a id="lk-concepts" href="#"><span class="ic">▸</span> concept explainers</a>
-          <a id="lk-blog" href="#"><span class="ic">▸</span> the build log</a>
+          <a id="lk-repo" href="https://github.com/kenlacroix/ZiranOS"><span class="ic">▸</span> the repository</a>
+          <a id="lk-concepts" href="https://github.com/kenlacroix/ZiranOS/tree/HEAD/docs/concepts"><span class="ic">▸</span> concept explainers</a>
+          <a id="lk-blog" href="https://github.com/kenlacroix/ZiranOS/tree/HEAD/docs/blog"><span class="ic">▸</span> the build log</a>
         </div>
       </div>
     </div>
@@ -493,14 +576,14 @@ make debug      # boot frozen, attach GDB</code>
         <summary>Is this a <em>real</em> operating system?</summary>
         <div class="a">
           <p>It’s a real <b>kernel</b> — the innermost, hardware-facing core of an OS — and it genuinely works: it boots itself, prints to the screen, catches errors, reads your keystrokes, and figures out how much memory the machine has. All from nothing.</p>
-          <p>It is <em>not yet</em> something you’d install and use, though. It can’t run programs, doesn’t have files, and has no windows or apps. Those are the later milestones on the roadmap above. Think “the engine and chassis, being built in the open,” not “a finished car.”</p>
+          <p>It is not something you’d install as your daily driver, though — and it isn’t trying to be. It <em>does</em> have a filesystem you can walk with <code>ls</code>/<code>cd</code>/<code>cat</code>, a shell, a preemptive scheduler, and it can even drop a small program into ring-3 user mode and take a syscall from it. What it deliberately lacks: graphical windows, an app ecosystem, and real networking (a loopback stub only — a stated non-goal). Think “the engine, chassis, and instruments, fully assembled in the open,” not “a finished car.”</p>
         </div>
       </details>
       <details class="qa">
         <summary>Is it really running inside my browser?</summary>
         <div class="a">
           <p>Honest answer: what you see is a <b>faithful reconstruction</b> — every line on that green screen is exactly what the real kernel prints, replayed here. It is not a mock-up or marketing text; it’s the true output, character for character.</p>
-          <p>The genuinely-live 64-bit kernel runs under <b>QEMU</b> (a full PC emulator) on a real computer — see “Run the real thing yourself” above. The in-browser emulator this page uses, <b>v86</b>, only emulates a <em>32-bit</em> PC and can’t switch into the 64-bit mode our kernel needs, so it can’t run the real kernel yet. Rather than fake it, the page is upfront that this is a reconstruction.</p>
+          <p>The lightweight emulator embedded in this page, <b>v86</b>, only emulates a <em>32-bit</em> PC and can’t switch into the 64-bit mode our kernel needs — so the green screen here is a reconstruction rather than a fake “live” demo. But you <em>can</em> boot the genuine article in your browser: the <b>▸ Boot the real kernel</b> button loads real QEMU compiled to WebAssembly and boots the actual 64-bit kernel to an interactive shell, live in the tab (a one-time ~17 MB download). And <a href="ctf.html">the filesystem CTF</a> runs that same live kernel so you can attack it.</p>
         </div>
       </details>
       <details class="qa">
@@ -511,10 +594,17 @@ make debug      # boot frozen, attach GDB</code>
         </div>
       </details>
       <details class="qa">
+        <summary>Can I try breaking it myself?</summary>
+        <div class="a">
+          <p>Yes — that’s the newest part. The <a href="ctf.html">🚩 filesystem CTF</a> boots the real kernel in your tab and challenges you to craft a disk image that makes the filesystem leak a flag it was built to hide — the exact exploit from milestone 16, in your hands. It’s a white-box sandbox on purpose: the lesson is the exploit primitive, not the secret.</p>
+          <p>A Tier-2 version — same exploit, but the flag lives only on a remote server and the capture has to land over the wire — is built and being hardened for public launch. It isn’t live yet; the CTF page says so honestly.</p>
+        </div>
+      </details>
+      <details class="qa">
         <summary>Where do I go to learn more?</summary>
         <div class="a">
           <p>The plain-language explainers this glossary is drawn from — written for people who’ve never done kernel work — live in the repo:</p>
-          <p><a href="../docs/concepts/interrupts.md">interrupts.md</a> · <a href="../docs/concepts/keyboard-and-pic.md">keyboard-and-pic.md</a> · <a href="../docs/concepts/physical-memory.md">physical-memory.md</a> · <a href="../docs/blog">the build log</a></p>
+          <p><a href="https://github.com/kenlacroix/ZiranOS/blob/HEAD/docs/concepts/interrupts.md">interrupts.md</a> · <a href="https://github.com/kenlacroix/ZiranOS/blob/HEAD/docs/concepts/virtual-memory.md">virtual-memory.md</a> · <a href="https://github.com/kenlacroix/ZiranOS/blob/HEAD/docs/concepts/filesystem.md">filesystem.md</a> · <a href="https://github.com/kenlacroix/ZiranOS/blob/HEAD/docs/concepts/privilege.md">privilege.md</a> · <a href="https://github.com/kenlacroix/ZiranOS/tree/HEAD/docs/blog">the build log</a></p>
           <p>Every claim on this page also links straight to the real source code — look for the <code>↗</code> links in the tour and the line-by-line log above.</p>
         </div>
       </details>
@@ -528,7 +618,7 @@ make debug      # boot frozen, attach GDB</code>
           <dt>Operating system</dt>
           <dd>The software layer between the hardware and the programs you run. It shares out the processor, memory, and devices so each app doesn’t have to know the raw machine. Ziran OS is one being built from zero.</dd>
           <dt>Kernel</dt>
-          <dd>The core of an operating system — the part that actually talks to the hardware and stays in control of the machine. Right now Ziran OS is almost <em>entirely</em> kernel.</dd>
+          <dd>The core of an operating system — the part that actually talks to the hardware and stays in control of the machine. Ziran OS is almost <em>entirely</em> kernel: it can drop a small program into ring-3 user mode, but there is deliberately no userland of apps on top.</dd>
           <dt>Bare metal</dt>
           <dd>Running directly on the (here, virtual) hardware with nothing underneath — no OS to borrow services from. Anything you’d normally ask an OS for, you build yourself.</dd>
           <dt>Rust <span class="term-alt">/ no_std</span></dt>
@@ -586,7 +676,7 @@ make debug      # boot frozen, attach GDB</code>
           <dt>Frame <span class="term-alt">/ frame allocator</span></dt>
           <dd>Usable RAM is chopped into fixed 4 KiB chunks called <em>frames</em>. The <em>frame allocator</em> is the bookkeeper that hands a free frame out, takes it back when done, and — the part that makes it real — can hand out that same frame again later. It’s the bottom stone of the memory stack.</dd>
           <dt>Virtual memory <span class="term-alt">/ paging / page tables</span></dt>
-          <dd>A hardware trick where every address a program uses (a <em>virtual</em> address) is translated to a real physical one through lookup tables called <em>page tables</em>. It lets memory be protected, relocated, and handed out flexibly. This is now built: the kernel constructs its own page tables from frames and switches the CPU onto them, so it manages its own memory map. The heap (the next milestone) grows on top of it.</dd>
+          <dd>A hardware trick where every address a program uses (a <em>virtual</em> address) is translated to a real physical one through lookup tables called <em>page tables</em>. It lets memory be protected, relocated, and handed out flexibly. This is now built: the kernel constructs its own page tables from frames and switches the CPU onto them, so it manages its own memory map. Everything above — the heap, the scheduler, the shell, the filesystem, even ring-3 userspace — grows on top of it.</dd>
           <dt>TLB</dt>
           <dd>A small cache inside the processor that remembers recent virtual→physical translations, so paging stays fast instead of walking the page tables on every single memory access.</dd>
           <dt>Heap <span class="term-alt">/ allocator</span></dt>
@@ -850,7 +940,7 @@ make debug      # boot frozen, attach GDB</code>
      watch:"The two [m16] lines: the same crafted disk image leaks the flag through the old check and is rejected by the new one — the difference is one bound.",
      q:"A secret is on the disk with no directory entry, so ls and cat can’t reach it. How could a crafted disk image still hand it to you?",
      a:"By naming it. The old mount only checked that a file’s bytes were *in the image*. Craft a directory entry whose offset+length lands on the hidden bytes — it passes that check, and reading the ‘file’ returns the secret. The filesystem read bytes on your behalf that you were never meant to reach: a confused deputy made of disk offsets instead of pointers (the M15 lesson, one layer down).",
-     ex:"<p>The secret <code>FLAG{ziran-boundary-leak}</code> was planted at the tail of the RAM disk back in Milestone 12, with no directory entry pointing at it — unreachable by navigation. But <code>read_path</code> hands back exactly <code>&image[offset .. offset+length]</code> from an entry, and Milestone 11’s <code>mount</code> only checked <code>offset + length &lt;= total_size</code> — the <em>whole image</em>. So a crafted entry whose extent aliases the secret’s bytes is accepted, and <code>cat</code>-ing it leaks the flag.</p><p>The fix names where the data actually ends. Format v3 gives meaning to the superblock’s last reserved word: <code>data_end</code>, the offset where addressable file data stops. The secret lives past it. The strict <code>mount</code> confines every entry’s extent to <code>&lt;= data_end</code>; an extent reaching into the reserved region is <code>ExtentEscapesData</code>. The old check compared against <code>total_size</code>; the fix compares against <code>data_end</code>. A bounds check is only as trustworthy as the bound it compares against.</p><details class='breakit'><summary>Break it: point a file entry at the hidden bytes — old check vs new</summary><div class='bd'><p>One crafted image, two readers: the loose reader (M11’s in-image bound) and the strict reader (the data_end confinement). The entry’s offset+length aliases the secret. Predict which reader leaks before you open this.</p><pre>mount_loose(craft): offset+length &lt;= total_size -> accepted -> read returns <span class='dead'>FLAG{ziran-boundary-leak}</span>\nmount(craft):       offset+length &gt; data_end   -> ExtentEscapesData -> rejected, flag safe\nmount(legit image): every extent &lt;= data_end   -> Ok -> real files still read byte-exact</pre><p>Same bytes, one comparison apart. And the honest edge: <code>data_end</code> is itself a field in the image, so an attacker who could rewrite the whole superblock (not just an entry) could forge it and reopen the leak — the same “don’t validate against attacker-controlled metadata” caveat as M15, and a real reminder that this OS is broken-to-learn, not hardened.</p></div></details>",
+     ex:"<p>The secret <code>FLAG{ziran-boundary-leak}</code> was planted at the tail of the RAM disk back in Milestone 12, with no directory entry pointing at it — unreachable by navigation. But <code>read_path</code> hands back exactly <code>&image[offset .. offset+length]</code> from an entry, and Milestone 11’s <code>mount</code> only checked <code>offset + length &lt;= total_size</code> — the <em>whole image</em>. So a crafted entry whose extent aliases the secret’s bytes is accepted, and <code>cat</code>-ing it leaks the flag.</p><p>The fix names where the data actually ends. Format v3 gives meaning to the superblock’s last reserved word: <code>data_end</code>, the offset where addressable file data stops. The secret lives past it. The strict <code>mount</code> confines every entry’s extent to <code>&lt;= data_end</code>; an extent reaching into the reserved region is <code>ExtentEscapesData</code>. The old check compared against <code>total_size</code>; the fix compares against <code>data_end</code>. A bounds check is only as trustworthy as the bound it compares against.</p><details class='breakit'><summary>Break it: point a file entry at the hidden bytes — old check vs new</summary><div class='bd'><p>One crafted image, two readers: the loose reader (M11’s in-image bound) and the strict reader (the data_end confinement). The entry’s offset+length aliases the secret. Predict which reader leaks before you open this.</p><pre>mount_loose(craft): offset+length &lt;= total_size -> accepted -> read returns <span class='dead'>FLAG{ziran-boundary-leak}</span>\nmount(craft):       offset+length &gt; data_end   -> ExtentEscapesData -> rejected, flag safe\nmount(legit image): every extent &lt;= data_end   -> Ok -> real files still read byte-exact</pre><p>Same bytes, one comparison apart. And the honest edge: <code>data_end</code> is itself a field in the image, so an attacker who could rewrite the whole superblock (not just an entry) could forge it and reopen the leak — the same “don’t validate against attacker-controlled metadata” caveat as M15, and a real reminder that this OS is broken-to-learn, not hardened.</p></div></details><p>🚩 <b>Try it yourself:</b> <a href='ctf.html'>the filesystem CTF</a> puts this exact exploit in your hands — craft the image, forge the superblock, and leak the flag from the real kernel running live in your tab.</p>",
      lesson:"A bounds check is only as trustworthy as the bound it compares against. M11 bounded a file extent by total_size (the whole image); confining it to data_end (where the data ends) is the difference between a secret that leaks and one that’s safe.",
      peek:"the same crafted image: mount_loose returns the 25 secret bytes; mount returns Err(ExtentEscapesData).",
      proof:"four outcomes asserted at boot and pinned by CI: navigation → NotFound (held); loose reader → flag captured byte-equal to the planted constant; strict reader → ExtentEscapesData; strict reader → legit files still byte-exact. Plus boundary and residual invariants.",
@@ -871,7 +961,7 @@ make debug      # boot frozen, attach GDB</code>
      watch:"Every milestone on the roadmap (M0–M16) is done: boot, memory, tasks, a shell, a file manager, two captured flags, and a socket.",
      q:"Sixteen milestones from an empty kernel. What was the whole thing an argument for?",
      a:"That you understand a system by building it from first principles — and by refusing the parts that would turn understanding into open-ended engineering. The core arc went bare metal → a file manager (M0–M12). The security track then made two boundaries real by breaking them and capturing a flag behind each (M13/M15 privilege, M16 filesystem). And the networking stretch (M14) shipped the smallest honest socket. Each milestone: one mechanism, understood, with an honest note on exactly how far it goes.",
-     ex:"<p>The build order was honest about priority — the security track (13, 15, 16) came before the numerically-earlier networking stretch (14), because breaking a real boundary taught more than a stub, so M14 landed last. What’s left undone is <em>deliberately</em> so: a real NIC driver and any protocol (non-goals or their own future milestones), a one-line UMIP demo for the sgdt/sidt leak (hardening, declined), and a generated FS fuzzing flood (a future post). None of it a gap in the roadmap.</p><p>The two security lessons are the through-line: a bounds check is only as good as the bound it trusts — permission vs addressability (M15), in-the-image vs in-the-data (M16). Thanks for taking the tour. Every claim here links to real code; go read it.</p>",
+     ex:"<p>The build order was honest about priority — the security track (13, 15, 16) came before the numerically-earlier networking stretch (14), because breaking a real boundary taught more than a stub, so M14 landed last. What’s left undone is <em>deliberately</em> so: a real NIC driver and any protocol (non-goals or their own future milestones), a one-line UMIP demo for the sgdt/sidt leak (hardening, declined), and a generated FS fuzzing flood (a future post). None of it a gap in the roadmap.</p><p>The two security lessons are the through-line: a bounds check is only as good as the bound it trusts — permission vs addressability (M15), in-the-image vs in-the-data (M16). Want to feel it instead of read it? <a href='ctf.html'>The filesystem CTF</a> hands you the M16 exploit against the live kernel. Thanks for taking the tour. Every claim here links to real code; go read it.</p>",
      links:[["STATUS.md","the milestone tracker"],["PLAN.md","the original plan"],["docs/blog","the build log (16 posts)"],["docs/concepts","the concept docs"]]}
   ];
 
@@ -1048,7 +1138,7 @@ make debug      # boot frozen, attach GDB</code>
   function simBoot(reason){
     mode="sim"; badge.textContent="reconstruction";
     var why = (reason==="notready")
-      ? "This is a <b>faithful reconstruction</b> of the exact serial/VGA output the real kernel produces — not the live emulator. A Multiboot1 trampoline (in the boot code) does get v86 to load and run our boot code, but v86 is a 32-bit emulator with no long mode, so the 64-bit kernel can’t start. The only browser emulator that could is Bochs-on-WASM, which is too heavy to be worth it — so the live kernel runs under QEMU instead (see the repo’s run instructions). "
+      ? "This is a <b>faithful reconstruction</b> of the exact serial/VGA output the real kernel produces — not the live emulator. A Multiboot1 trampoline (in the boot code) does get v86 to load and run our boot code, but v86 is a 32-bit emulator with no long mode, so the 64-bit kernel can’t start <i>here</i>. For the genuine article, the <b>▸ Boot the real kernel</b> button opens real QEMU compiled to WebAssembly, which boots the actual 64-bit kernel to an interactive shell in a new tab. "
       : "The live emulator couldn’t be reached (offline, blocked, or missing v86 files), so this is a <b>faithful reconstruction</b> of the same boot. ";
     $("mnote").innerHTML = "A faithful reconstruction of the real kernel’s boot output — every line below is exactly what the kernel prints; typing echoes locally.";
     $("mnote-detail").innerHTML = why;
@@ -1162,22 +1252,12 @@ make debug      # boot frozen, attach GDB</code>
   $("boot").addEventListener("click",function(){ screenEl.focus(); boot(); });
   $("restart").addEventListener("click",function(){ boot(); });
 
-  // --- Live boot via qemu-wasm (REAL 64-bit QEMU in WebAssembly; ~46 MB; opt-in) --
-  // v86 is 32-bit and can't run our long-mode kernel; qemu-wasm can. Off until the
-  // assets are built into web/ and verified in a browser (docs/planning/
-  // web-live-boot-qemu-wasm.md). Flip QEMU_WASM_READY to true then.
-  // The live boot (real QEMU in WASM + xterm-pty) lives on its own page,
-  // qemu-wasm.html — it needs the ~46 MB assets built by web/build-qemu-wasm.sh.
-  // Hidden until QEMU_WASM_READY is flipped on (once the assets are staged).
-  var QEMU_WASM_READY = true;
-  (function(){
-    var btn = $("boot-real");
-    if(!btn) return;
-    if(QEMU_WASM_READY) btn.hidden = false;
-    btn.addEventListener("click", function(){
-      window.open("qemu-wasm.html", "_blank", "noopener");
-    });
-  })();
+  // --- Live boot via qemu-wasm (REAL 64-bit QEMU in WebAssembly; ~17 MB) ---
+  // v86 is 32-bit and can't run our long-mode kernel; qemu-wasm can. The live
+  // boot lives on its own page, qemu-wasm.html, and is LIVE — the assets built
+  // by web/build-qemu-wasm.sh are deployed alongside the site. The control is a
+  // plain <a href="qemu-wasm.html"> in the markup so crawlers (and no-JS
+  // visitors) can reach it; no JS gate is needed anymore.
 
   // autostart the tour's machine (simulated-first is instant; real upgrades if reachable)
   boot();
