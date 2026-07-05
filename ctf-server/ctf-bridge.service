@@ -1,0 +1,42 @@
+# Hardened systemd unit for the Tier-2 CTF bridge.
+# Installed to /etc/systemd/system/ by setup-vm.sh.
+[Unit]
+Description=Ziran OS Tier-2 CTF bridge (WebSocket -> ephemeral QEMU)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ctf
+Group=ctf
+WorkingDirectory=/opt/ziran
+ExecStart=/usr/bin/node /opt/ziran/bridge.mjs
+Restart=on-failure
+RestartSec=2
+
+# --- config (override in /etc/systemd/system/ctf-bridge.service.d/*.conf) ---
+Environment=PORT=8080
+Environment=HOST=127.0.0.1
+Environment=KERNEL=/opt/ziran/kernel-v86.bin
+Environment=MAX_CONCURRENT=12
+Environment=MAX_PER_IP=2
+Environment=SESSION_MS=180000
+
+# --- sandboxing the bridge process itself (it still spawns QEMU) ---
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/ziran
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+# Cap the whole service tree; per-instance caps come from systemd-run in bridge.mjs.
+MemoryMax=4G
+CPUQuota=400%
+TasksMax=512
+
+[Install]
+WantedBy=multi-user.target

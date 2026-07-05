@@ -1,0 +1,17 @@
+{
+  "name": "ziran-ctf-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Tier-2 CTF bridge: one WebSocket -> one ephemeral, flag-injected QEMU booting the Ziran kernel.",
+  "main": "bridge.mjs",
+  "scripts": {
+    "start": "node bridge.mjs"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
