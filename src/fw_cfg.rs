@@ -21,6 +21,16 @@ const DATA: u16 = 0x511; //     then read the selected item's bytes here, in ord
 const FILE_DIR: u16 = 0x0019; // selector of the file directory (name -> selector)
 const DIR_NAME_LEN: usize = 56; // width of the name field in a directory entry
 
+// Sanity caps. A real fw_cfg directory has a few dozen entries and small items;
+// these bound the work if the device ever reports garbage — an absent or odd
+// fw_cfg returning all-ones would otherwise make `count`/`size` ~4 billion and
+// hang the boot reading the data port forever (or OOM on the allocation). The
+// caps keep this reader as total as the rest of the kernel's hostile-input
+// parsing (cf. fs.rs), and they also protect the public browser boot, which now
+// runs this at startup. A legitimate `opt/flag` is tiny, so neither cap is close.
+const MAX_ENTRIES: usize = 4096;
+const MAX_ITEM_BYTES: usize = 64 * 1024;
+
 // SAFETY (applies to every port access below): a `fw_cfg` read only advances the
 // selected item's read cursor and has no other side effect; selecting an item is
 // idempotent and resets that cursor. The ports are the fixed QEMU `fw_cfg`
@@ -49,9 +59,11 @@ pub fn read_file(name: &str) -> Option<Vec<u8>> {
     // The file directory: a big-endian u32 count, then that many 64-byte entries of
     // { size: be u32, select: be u16, reserved: u16, name: [u8; 56] (NUL-padded) }.
     select(FILE_DIR);
-    let count = be_u32() as usize;
+    // Cap the walk: a garbage count must not turn this into an unbounded read.
+    let count = (be_u32() as usize).min(MAX_ENTRIES);
     for _ in 0..count {
-        let size = be_u32() as usize;
+        // Cap the item size too: it bounds the one allocation we make on a match.
+        let size = (be_u32() as usize).min(MAX_ITEM_BYTES);
         let sel = be_u16();
         let _reserved = be_u16();
         let raw = data_bytes(DIR_NAME_LEN);
