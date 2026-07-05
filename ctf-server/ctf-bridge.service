@@ -27,6 +27,9 @@ Environment=HOURLY_BUDGET=1000
 # Optional human gate: set to your Cloudflare Turnstile SECRET key to require a
 # challenge before any session spawns. Leave empty to disable.
 Environment=TURNSTILE_SECRET=
+# Optional decoy flag: set to an all-hex-bodied FLAG{ziran-tier2-...} to trip on
+# scraped-flag submissions. Leave empty to disable. Keep it OUT of version control.
+Environment=HONEYTOKEN=
 # Kill switch: `touch /opt/ziran/PAUSED` to stop accepting new sessions (no restart).
 Environment=PAUSE_FILE=/opt/ziran/PAUSED
 

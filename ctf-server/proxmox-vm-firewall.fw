@@ -33,7 +33,7 @@ IN ACCEPT -source 192.0.2.10 -p tcp -dport 22 -log nolog   # <- EXAMPLE: your ad
 
 # --- OUTBOUND: the island — allow the gateway (WAN/DNS) + public internet,
 #     but DROP everything headed for the LAN. Rules are first-match, top-down. ---
-OUT ACCEPT -dest 192.168.1.1 -log nolog          # default gateway -> WAN + DNS via router
+OUT ACCEPT -dest 192.0.2.1 -log nolog            # CHANGE ME: default gateway -> WAN + DNS via router
 OUT DROP   -dest 192.168.0.0/16 -log nolog        # block the LAN
 OUT DROP   -dest 10.0.0.0/8 -log nolog
 OUT DROP   -dest 172.16.0.0/12 -log nolog

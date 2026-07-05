@@ -32,3 +32,6 @@
 *~
 .idea/
 .vscode/
+
+# Claude Code local worktrees (transient; never publish)
+.claude/worktrees/
