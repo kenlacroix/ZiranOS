@@ -213,6 +213,12 @@ ziranos.pages.dev · github.com/kenlacroix/ZiranOS
 - **Why the CTF matters:** the security track attacks the kernel's *own* boundaries
   to learn what they enforce — not to harden against the world (an explicit non-goal).
   Tier 2 makes it a real remote capture: the secret is never in anything you're given.
+- **Be honest about the CTF's scope (say it before someone else does):** it's *one*
+  vulnerability class — a length-confusion / *logical* out-of-bounds read (CWE-125),
+  not memory corruption — deliberately planted and defended-against by the strict reader
+  in the same file. One bug, one path, not a broad attack surface. Stating this up front
+  (with pointers to CWE-125, LangSec, Project Zero, pwn.college for the real field) reads
+  as credibility, and pre-empts the "that's just a toy bug" comment.
 - **The AI-workflow story:** the differentiator isn't "AI wrote it," it's the
   verification harness that makes AI-assisted systems work trustworthy — CI boots the
   kernel, boundaries are fuzzed, unsafe is reviewed, and the retros are honest.

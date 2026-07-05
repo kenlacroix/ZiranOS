@@ -157,6 +157,19 @@ actually can — is the shape I'd want if I were on the other side of it.
 
 In the spirit of not pretending a toy is hardened:
 
+- **This is one vulnerability class, and a *logical* one.** The bug is a bounds
+  check that trusts an attacker-supplied length — a classic out-of-bounds read
+  ([CWE-125](https://cwe.mitre.org/data/definitions/125.html)) — but not the
+  memory-unsafe kind: the kernel slices its backing buffer in safe Rust, so every
+  read stays inside the allocation. It's information disclosure past a *logical*
+  fence, not corruption or a smashed stack. One deliberately-planted path, defended
+  against by the strict reader in the very same file — not a model of a hardened
+  kernel's real attack surface, and modern kernels layer memory-safe languages,
+  fuzzing, and mitigations precisely to keep this class out. For the field this toy
+  only gestures at: [LangSec](http://langsec.org/) (parsing untrusted input as *the*
+  boundary), [Project Zero](https://googleprojectzero.blogspot.com/) (the class in
+  real production exploits), [pwn.college](https://pwn.college/) (hands-on, well past
+  this one primitive).
 - **I didn't close the forged-`data_end` residual, and I'm not going to.** In
   Tier 1 it's the *feature* — the whole challenge is that you control the field
   the check trusts. A filesystem that genuinely resisted this would need the
