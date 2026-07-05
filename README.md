@@ -17,6 +17,22 @@ stand right now.
 
 ---
 
+## Try it — it's live
+
+- 🖥️ **Boot the real kernel in your browser** → **[ziranos.pages.dev](https://ziranos.pages.dev)**
+  Real QEMU compiled to WebAssembly runs the *actual* 64-bit kernel to an
+  interactive shell in a tab — not a replay — beside a guided predict → observe →
+  explain tour over every layer.
+- 🚩 **Filesystem CTF — Tier 1 (in-browser)** → **[ziranos.pages.dev/ctf](https://ziranos.pages.dev/ctf)**
+  Craft a disk image and make the kernel's own filesystem hand you a flag `ls`
+  can't see. White-box practice — the point is the exploit primitive, not secrecy.
+- 🌐 **Remote capture — Tier 2** → **[ziranos.pages.dev/ctf-remote](https://ziranos.pages.dev/ctf-remote)**
+  A *real* remote CTF: a unique flag is minted per session and lives only in the
+  server instance's RAM — not in this repo, not in the page, not in any bytes you're
+  given. Steal it over the wire.
+
+---
+
 ## Why this exists — and why it isn't AI slop
 
 **What I set out to learn** wasn't "how to build an OS." It was what is actually
@@ -88,7 +104,7 @@ New here? Start with the plain-language explainers in
 [`docs/concepts/`](docs/concepts/) — e.g. [interrupts](docs/concepts/interrupts.md),
 written from first principles alongside the code. Or explore it in your browser:
 the **[`web/`](web/) teaching tool** walks a guided predict → observe → explain
-tour over milestones M0–M12 (with an ELI5 toggle for plain-language explanations,
+tour over milestones M0–M16 (with an ELI5 toggle for plain-language explanations,
 and the "why this exists / not AI slop" manifesto up front). It comes in three
 levels of realness, each labelled honestly:
 
@@ -100,15 +116,19 @@ levels of realness, each labelled honestly:
   byte-for-byte over the serial line (`make console`), replayed with real timing;
 - **a genuine live boot** — real QEMU compiled to WebAssembly
   (`web/build-qemu-wasm.sh`) booting the actual 64-bit kernel (via `-kernel`) in the
-  tab. This **works** — verified booting to an interactive `ziran:/>` shell in a
-  browser, both by hand and by an automated headless-Chrome test (`make web-test`),
-  and it flushed out two latent boot bugs along the way. The "Boot the real kernel"
-  button is live; the ~17 MB of assets just aren't publicly **hosted** yet — run it
-  now with `make serve` (or self-host).
+  tab. This is **live and hosted at [ziranos.pages.dev](https://ziranos.pages.dev)** —
+  verified booting to an interactive `ziran:/>` shell in a browser, both by hand and
+  by an automated headless-Chrome test (`make web-test`), and it flushed out two
+  latent boot bugs along the way.
+
+And a **capture-the-flag against the kernel itself**:
+[Tier 1](https://ziranos.pages.dev/ctf) is white-box practice in your browser (leak a
+flag the filesystem hides); [Tier 2](https://ziranos.pages.dev/ctf-remote) is a real
+remote capture where the flag lives only in a server's RAM. See
+[`ctf-server/`](ctf-server/) for the (host-side) remote-CTF infrastructure.
 
 Hosting is written up in [`docs/DEPLOY.md`](docs/DEPLOY.md) (Cloudflare Pages; with
-the `.data` now trimmed to ~0.5 MB the whole thing fits under Pages' 25 MB/file cap,
-so R2 is optional).
+the `.data` trimmed to ~0.5 MB the whole thing fits under Pages' 25 MB/file cap).
 
 | Range | State |
 |------|-------|
