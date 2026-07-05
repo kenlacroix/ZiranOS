@@ -4,6 +4,26 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Ziran OS — Filesystem CTF, Tier 2 (remote capture)</title>
+  <meta name="description" content="Tier 2 of the Ziran OS filesystem CTF — a remote capture. A unique flag is minted per session and lives only in the server's RAM (not in this page, the repo, or any bytes you're given). Steal it over the wire by exploiting a from-scratch kernel's filesystem.">
+  <link rel="canonical" href="https://ziranos.pages.dev/ctf-remote">
+  <meta name="robots" content="index, follow">
+  <meta name="author" content="Kenneth LaCroix">
+  <meta name="theme-color" content="#0b0e14">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Ziran OS">
+  <meta property="og:url" content="https://ziranos.pages.dev/ctf-remote">
+  <meta property="og:title" content="Ziran OS — Filesystem CTF, Tier 2 (remote capture)">
+  <meta property="og:description" content="A real remote capture-the-flag: a per-session flag lives only in a server's RAM. Steal it over the wire from a from-scratch kernel you can't otherwise read.">
+  <meta property="og:image" content="https://ziranos.pages.dev/og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="A terminal capturing a FLAG from a remote Ziran OS kernel">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Ziran OS — Filesystem CTF, Tier 2 (remote capture)">
+  <meta name="twitter:description" content="A per-session flag lives only in the server's RAM. Steal it over the wire.">
+  <meta name="twitter:image" content="https://ziranos.pages.dev/og.png">
   <link rel="stylesheet" href="./vendor/xterm.css">
   <!-- Cloudflare Turnstile: a human check before the server spins up a VM. Loads
        cross-origin, so this page is exempted from COEP in _headers (it uses no
@@ -63,7 +83,7 @@
          data-callback="onTurnstileSuccess" data-theme="dark"></div>
   </div>
 
-  <div id="terminal"></div>
+  <div id="terminal" role="application" aria-label="Ziran OS remote kernel terminal — type commands"></div>
   <div id="status">complete the check above to connect…</div>
 
   <div class="capture" id="capture">
@@ -87,7 +107,7 @@
       the repo or this page won't verify.
     </p>
     <div style="display:flex; gap:.5rem; align-items:center; flex-wrap:wrap">
-      <input id="flag-input" type="text" size="40" placeholder="FLAG{ziran-tier2-…}"
+      <input id="flag-input" type="text" size="40" aria-label="Flag to verify" placeholder="FLAG{ziran-tier2-…}"
              style="background:#0b0e14; color:#a6e3a1; border:1px solid #45507a; border-radius:6px; padding:.5rem .6rem; font-family:ui-monospace,monospace">
       <button class="primary" id="submit">Verify</button>
       <span class="note" id="submit-status"></span>

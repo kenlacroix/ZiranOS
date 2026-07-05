@@ -222,15 +222,15 @@
         same exploit over the wire — develop it here, capture it there. That's the
         version worth bragging about.
         <br><br>
-        <span class="warn">Tier 2 is built and being hardened for public launch — it is
-        not live yet.</span> Develop your exploit here in the meantime; when the remote
-        capture opens, this same crafted image is what you'll fire over the wire.
+        <b>Tier 2 is <a href="./ctf-remote.html">live</a>.</b> Develop your exploit
+        here first — the flag is your own, so you can iterate freely — then reproduce it
+        against the per-session offset the remote kernel prints for your instance.
       </p>
     </details>
   </div>
 
   <footer>
-    <span class="mono">自然 · Ziran OS</span> — a from-scratch x86-64 hobby OS.
+    <span style="font-family:ui-monospace,monospace">自然 · Ziran OS</span> — a from-scratch x86-64 hobby OS.
     Built by <a href="https://www.kennethlacroix.me" target="_blank" rel="noopener">Kenneth LaCroix</a> ·
     <a href="https://github.com/kenlacroix/ZiranOS" target="_blank" rel="noopener">source on GitHub</a> ·
     <a href="./index.html">guided tour</a>
@@ -410,25 +410,36 @@
       return { buf, dataStart, honestDataEnd, secretOff, imgLen };
     }
 
-    const numOrNull = (id) => { const v = parseInt(document.getElementById(id).value, 10); return Number.isNaN(v) ? null : v; };
+    // ZranFS fields are unsigned 32-bit; reject blank/negative/overflow/garbage so a
+    // bad value can't silently wrap through the `>>> 0` coercion in buildCraft.
+    const numOrNull = (id) => {
+      const v = parseInt(document.getElementById(id).value, 10);
+      return (Number.isInteger(v) && v >= 0 && v <= 0xFFFFFFFF) ? v : null;
+    };
     document.getElementById('craft-build').onclick = () => {
       const appendSecret = document.getElementById('craft-local').checked;
       const secret = secretEl();
-      const r = buildCraft({
-        total0: numOrNull('craft-total'), dataEnd: numOrNull('craft-dataend'),
-        off0: numOrNull('craft-off'), len0: numOrNull('craft-len'),
-        appendSecret, secret,
-      });
+      const total0 = numOrNull('craft-total'), dataEnd = numOrNull('craft-dataend');
+      const off0 = numOrNull('craft-off'), len0 = numOrNull('craft-len');
+      const r = buildCraft({ total0, dataEnd, off0, len0, appendSecret, secret });
       document.getElementById('image').value = toB64(r.buf);
-      if (appendSecret) captureTarget = secret;   // arm local capture detection
+      captureTarget = appendSecret ? secret : null;   // arm (or clear) local capture detection
       captured = false;
       document.getElementById('capture').classList.remove('show');
-      document.getElementById('craft-info').innerHTML =
-        `built a ${r.imgLen}-byte image · file table ends / data begins at offset <b>${r.dataStart}</b> · ` +
-        `an honest <code>data_end</code> here is <b>${r.honestDataEnd}</b>` +
-        (appendSecret
-          ? ` · local flag planted at offset <b>${r.secretOff}</b>`
-          : ` · <b>no local flag</b> — on Tier 2 the server appends its flag past your ${r.imgLen} bytes; aim at the offset <code>load</code> prints`);
+      const show = (v) => v == null ? 'honest' : v;
+      let info = `built a ${r.imgLen}-byte image · data begins at offset <b>${r.dataStart}</b> · ` +
+        `honest <code>data_end</code> is <b>${r.honestDataEnd}</b> · declared ` +
+        `<code>total_size</code>=<b>${show(total0)}</b>, <code>data_end</code>=<b>${show(dataEnd)}</b>, ` +
+        `<code>notes.txt</code> len=<b>${show(len0)}</b>`;
+      info += appendSecret
+        ? ` · local flag at offset <b>${r.secretOff}</b>`
+        : ` · <b>no local flag</b> — Tier 2's server appends its flag past your ${r.imgLen} bytes; aim at the offset <code>load</code> prints`;
+      // The strict Tier-1 reader requires total_size == the real image length; over-
+      // declaring it only pays off on Tier 2, where the appended flag extends the buffer.
+      if (appendSecret && total0 != null && total0 !== r.imgLen)
+        info += ` · <span class="warn">⚠ total_size=${total0} ≠ image length ${r.imgLen}; the local mount will reject this — over-declaring total_size only works on Tier 2.</span>`;
+      info += ` · <b>→ now hit “Load into the kernel” above.</b>`;
+      document.getElementById('craft-info').innerHTML = info;
     };
 
     // -- stream the image into the running `load` command --------------------
