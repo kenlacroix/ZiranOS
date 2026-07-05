@@ -282,3 +282,7 @@ sandbox, where QEMU wasn't installable.
 ## License
 
 **MIT** — see [LICENSE](LICENSE).
+
+---
+
+Built by [Kenneth LaCroix](https://kennethlacroix.me)
