@@ -22,7 +22,7 @@ log "packages"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
 apt-get install -y --no-install-recommends \
-  qemu-system-x86 nodejs npm nftables ca-certificates curl gnupg
+  qemu-system-x86 nodejs npm nftables ca-certificates curl gnupg openssh-server
 
 log "cloudflared (Cloudflare tunnel)"
 if ! command -v cloudflared >/dev/null; then
@@ -71,4 +71,16 @@ cat <<EOF
 
 Then:  systemctl start ctf-bridge   &&   journalctl -u ctf-bridge -f
 Point the browser client's WebSocket at wss://ctf.yourdomain/.
+
+3) Admin / Claude inspection (INBOUND you->VM; the island is untouched):
+     # on the VM, authorize your Mac's key for a non-root admin user:
+     useradd -m -s /bin/bash ctf-admin && usermod -aG sudo ctf-admin
+     install -d -m700 /home/ctf-admin/.ssh
+     # paste your Mac's ~/.ssh/id_*.pub into:
+     #   /home/ctf-admin/.ssh/authorized_keys   (chmod 600, chown ctf-admin)
+   The in-VM firewall (nftables.conf) already allows SSH only from the gateway
+   (10.66.66.1). Reach it from your Mac through the Proxmox host as a jump host:
+     ssh -J root@<proxmox-lan-ip> ctf-admin@10.66.66.2
+   Make every hop key-based so Claude can inspect non-interactively, e.g.:
+     ssh -J root@<proxmox> ctf-admin@10.66.66.2 'systemctl status ctf-bridge; journalctl -u ctf-bridge -n50'
 EOF
