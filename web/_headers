@@ -12,6 +12,15 @@
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
 
+# The Tier-2 remote-capture page uses no wasm/SharedArrayBuffer (just xterm + a
+# WebSocket), so it doesn't need cross-origin isolation — and COEP would block the
+# cross-origin Cloudflare Turnstile script/iframe. Turn COEP off for this page only
+# (a later, more specific rule overrides the site-wide COEP above).
+/ctf-remote
+  Cross-Origin-Embedder-Policy: unsafe-none
+/ctf-remote.html
+  Cross-Origin-Embedder-Policy: unsafe-none
+
 # The big emulator payloads change only on a rebuild — cache them hard. If you
 # rebuild and need clients to refetch, purge the Cloudflare cache (or hard-reload).
 # Emscripten keeps the qemu-system-x86_64.* names (baked into out.js); those are the

@@ -5,6 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Ziran OS — Filesystem CTF, Tier 2 (remote capture)</title>
   <link rel="stylesheet" href="./vendor/xterm.css">
+  <!-- Cloudflare Turnstile: a human check before the server spins up a VM. Loads
+       cross-origin, so this page is exempted from COEP in _headers (it uses no
+       wasm/SharedArrayBuffer, so it doesn't need cross-origin isolation). -->
+  <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
   <style>
     :root { color-scheme: dark; }
     body { background:#0b0e14; color:#cdd6f4; font-family:system-ui,sans-serif; margin:0; padding:1rem 1.25rem 4rem; line-height:1.5; }
@@ -48,8 +52,15 @@
     host appended right after it.
   </div>
 
+  <div id="gate" class="panel">
+    <p class="note" style="margin-top:.2rem">Quick human check to connect — it keeps
+      bots from spinning up VMs on the server:</p>
+    <div class="cf-turnstile" data-sitekey="0x4AAAAAADv_SIK04tIy5kem"
+         data-callback="onTurnstileSuccess" data-theme="dark"></div>
+  </div>
+
   <div id="terminal"></div>
-  <div id="status">connecting…</div>
+  <div id="status">complete the check above to connect…</div>
 
   <div class="capture" id="capture">
     <h2>🚩 Captured!</h2>
@@ -134,10 +145,14 @@
     };
 
     // ---- WebSocket transport: terminal <-> the bridge's serial pipe -------------
-    let ws;
-    function connect() {
-      status('connecting to ' + WS_URL + ' …');
-      ws = new WebSocket(WS_URL);
+    let ws, connected = false;
+    function connect(token) {
+      if (connected) return;
+      connected = true;
+      // The bridge verifies the Turnstile token (?t=) before spawning a VM.
+      const url = token ? WS_URL + (WS_URL.includes('?') ? '&' : '?') + 't=' + encodeURIComponent(token) : WS_URL;
+      status('connecting …');
+      ws = new WebSocket(url);
       ws.binaryType = 'arraybuffer';
       ws.onopen = () => status('connected — the server is booting the kernel…');
       ws.onmessage = (e) => term.write(typeof e.data === 'string' ? e.data : new Uint8Array(e.data));
@@ -145,7 +160,23 @@
       ws.onerror = () => status('connection error — the server may be busy or down.');
       term.onData((d) => { if (ws && ws.readyState === WebSocket.OPEN) ws.send(d); });
     }
-    connect();
+
+    // Turnstile calls this once the human check passes; then we connect and hide the
+    // gate. (If the bridge has no secret set, the token is simply ignored.)
+    window.onTurnstileSuccess = (token) => {
+      const g = document.getElementById('gate');
+      if (g) g.style.display = 'none';
+      connect(token);
+    };
+
+    // Testing against a specific bridge (?ws=…) skips the gate — that bridge is
+    // assumed to have no Turnstile secret. The default (production) waits for the
+    // check above.
+    if (new URLSearchParams(location.search).get('ws')) {
+      const g = document.getElementById('gate');
+      if (g) g.style.display = 'none';
+      connect();
+    }
 
     // ---- the Tier-2 crafted image (built in-page) ------------------------------
     const enc = new TextEncoder();
