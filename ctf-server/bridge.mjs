@@ -62,8 +62,10 @@ const CONFIG = {
   SESSION_MS:     int(process.env.SESSION_MS, 180_000),  // hard lifetime (3 min)
   IDLE_MS:        int(process.env.IDLE_MS, 90_000),      // kill after no client input
   MAX_MSG_BYTES:  int(process.env.MAX_MSG_BYTES, 262_144),      // reject huge single msgs
-  MAX_IN_BYTES:   int(process.env.MAX_IN_BYTES, 4_194_304),     // total input per session
+  MAX_IN_BYTES:   int(process.env.MAX_IN_BYTES, 4_194_304),     // total input per session (control incl.)
   MAX_WS_BACKLOG: int(process.env.MAX_WS_BACKLOG, 8_388_608),   // kill if client can't keep up
+  SUBMIT_MAX:     int(process.env.SUBMIT_MAX, 30),   // max flag submissions per session (anti log-flood)
+  HEALTH_TOKEN:   process.env.HEALTH_TOKEN ?? '',    // set => /health is verbose only with ?token=<it>
   // --- per-instance cgroup caps (via systemd-run when available) ---
   CPU_QUOTA:      process.env.CPU_QUOTA ?? '60%',
   MEM_MAX:        process.env.MEM_MAX ?? '256M',
@@ -127,13 +129,16 @@ function buildQemuArgs(flag) {
     '-fw_cfg', `name=opt/flag,string=${flag}`,   // server-controlled; never client input
   ];
 }
-// Probe ONCE whether we can wrap QEMU in a systemd-run scope for per-instance
-// cgroup caps. As an unprivileged service user this fails with "Interactive
-// authentication required" (creating a system scope needs polkit/root) — and that
-// is a *runtime* failure of systemd-run, not a spawn error, so it can't be caught
-// per-launch. If it doesn't work we spawn QEMU directly: the service-tree caps
-// (MemoryMax/CPUQuota/TasksMax in the unit) + `-m` per instance + MAX_CONCURRENT
-// still bound the box. Run the bridge as root to get the per-instance caps.
+// Per-instance cgroup caps via `systemd-run`, probed ONCE at boot. Creating a scope
+// needs the SYSTEM manager (root/polkit), so this only engages when the bridge runs as
+// root — then each QEMU gets its own MemoryMax/CPUQuota/TasksMax. As the unprivileged
+// `ctf` user the probe fails and we spawn QEMU directly, relying on the service-tree
+// caps (unit `MemoryMax`/`CPUQuota`, sized *below* VM RAM) + `-m` + MAX_CONCURRENT to
+// keep a fleet or a runaway from taking the host down. (A root-free `--user` scope was
+// evaluated and rejected: a system service's children live in `system.slice`, which the
+// user manager can't move into its own slice — it fails with EPERM.) So `caps=tree-only`
+// in the startup log is expected while unprivileged; run the bridge as root for true
+// per-instance isolation instead of the tree backstop.
 const USE_SYSTEMD_RUN = (() => {
   try {
     return spawnSync('systemd-run', ['--scope', '--quiet', '--', 'true'],
@@ -155,15 +160,21 @@ function spawnQemu(flag) {
 
 // ---- HTTP server: /health for monitoring; the WS upgrades on the same port ------
 const server = createServer((req, res) => {
-  if (req.url === '/health' || req.url === '/healthz') {
+  const u = new URL(req.url || '/', 'http://x');
+  if (u.pathname === '/health' || u.pathname === '/healthz') {
+    // Public payload is deliberately minimal: exposing the concurrency ceiling,
+    // hourly budget, and spawn/reject counters is free recon for sizing a flood
+    // (and lets an attacker watch rejected_total to see their abuse register). The
+    // full metrics require ?token=<HEALTH_TOKEN>; unset token => liveness only.
+    const full = CONFIG.HEALTH_TOKEN && u.searchParams.get('token') === CONFIG.HEALTH_TOKEN;
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({
+    res.end(JSON.stringify(full ? {
       ok: !paused(), paused: paused(),
       live: metrics.live, max: CONFIG.MAX_CONCURRENT,
       spawned_total: metrics.spawned, rejected_total: metrics.rejected,
       hourly_spawns: spawnTimes.length, hourly_budget: CONFIG.HOURLY_BUDGET,
       uptime_s: Math.floor((Date.now() - metrics.startedAt) / 1000),
-    }));
+    } : { ok: !paused(), paused: paused() }));
   } else { res.writeHead(404); res.end(); }
 });
 const wss = new WebSocketServer({ server, maxPayload: CONFIG.MAX_MSG_BYTES });
@@ -172,7 +183,8 @@ server.listen(CONFIG.PORT, CONFIG.HOST, () => {
   console.log(`[bridge] caps: total=${CONFIG.MAX_CONCURRENT} per-ip=${CONFIG.MAX_PER_IP} ` +
     `session=${CONFIG.SESSION_MS}ms idle=${CONFIG.IDLE_MS}ms rate=${CONFIG.RATE_MAX}/${CONFIG.RATE_WINDOW_MS}ms ` +
     `hourly=${CONFIG.HOURLY_BUDGET} turnstile=${CONFIG.TURNSTILE_SECRET ? 'on' : 'off'} ` +
-    `sandbox=${USE_SYSTEMD_RUN ? 'systemd-run' : 'direct'}`);
+    `submit_max=${CONFIG.SUBMIT_MAX} health=${CONFIG.HEALTH_TOKEN ? 'gated' : 'public-min'} ` +
+    `caps=${USE_SYSTEMD_RUN ? 'per-instance' : 'tree-only'}`);
 });
 
 wss.on('connection', async (ws, req) => {
@@ -203,6 +215,7 @@ wss.on('connection', async (ws, req) => {
   log(`spawned (flag=${flag.slice(0, 18)}…), live=${metrics.live}`);
 
   let inBytes = 0;
+  let submits = 0;
   const kill = () => { try { qemu.kill('SIGKILL'); } catch {} };
 
   // Send a control frame to the client (CTL-prefixed so the terminal doesn't render it).
@@ -212,7 +225,12 @@ wss.on('connection', async (ws, req) => {
   // A flag submission arrives on the control channel and is checked by hash against
   // this session's flag (and the committed honeytoken). We never compare or log the
   // plaintext flag; the honeytoken path is logged as a shortcut-taker tripwire.
+  // Capped per session (SUBMIT_MAX): beyond it, submits are dropped BEFORE any
+  // JSON.parse / SHA-256 / log line, so a client can't turn the channel into a
+  // CPU/log-flood (its bytes still count toward MAX_IN_BYTES in the message handler).
   const handleControl = (jsonBuf) => {
+    if (submits >= CONFIG.SUBMIT_MAX) return;
+    submits++;
     let msg; try { msg = JSON.parse(jsonBuf.toString('utf8')); } catch { return; }
     if (msg?.type !== 'submit' || typeof msg.flag !== 'string') return;
     const h = sha256(msg.flag.trim());
@@ -250,15 +268,17 @@ wss.on('connection', async (ws, req) => {
   ws.on('message', (data, isBinary) => {
     bumpIdle();
     const buf = isBinary ? data : Buffer.from(data.toString());
-    // Control channel (CTL-prefixed binary): a flag submission, not console input.
-    // It never reaches the guest and doesn't count against the serial input cap.
-    if (buf.length >= CTL.length && buf.subarray(0, CTL.length).equals(CTL)) {
-      handleControl(buf.subarray(CTL.length));
-      return;
-    }
+    // Count EVERY inbound byte toward the cap first — control frames included — so a
+    // client can't evade MAX_IN_BYTES by tunnelling volume through the control channel.
     inBytes += buf.length;
     if (inBytes > CONFIG.MAX_IN_BYTES) {
       log('killed: input cap'); kill(); try { ws.close(1009, 'input limit'); } catch {}
+      return;
+    }
+    // Control channel (CTL-prefixed binary): a flag submission, not console input.
+    // It never reaches the guest; it's rate-limited per session inside handleControl.
+    if (buf.length >= CTL.length && buf.subarray(0, CTL.length).equals(CTL)) {
+      handleControl(buf.subarray(CTL.length));
       return;
     }
     if (qemu.stdin.writable) qemu.stdin.write(buf);

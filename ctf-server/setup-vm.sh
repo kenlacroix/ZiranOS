@@ -40,6 +40,11 @@ mkdir -p "$CTF_HOME"
 cp "$HERE/bridge.mjs" "$HERE/package.json" "$CTF_HOME/"
 ( cd "$CTF_HOME" && npm install --omit=dev --no-audit --no-fund )
 chown -R "$CTF_USER:$CTF_USER" "$CTF_HOME"
+# Note on per-instance cgroup caps: they require the bridge to run as root (system
+# scope). As the unprivileged `ctf` user it logs `caps=tree-only` and the box is bounded
+# by the service-tree `MemoryMax`/`CPUQuota` in ctf-bridge.service (sized below VM RAM).
+# A root-free `--user` scope does NOT work from a system service (system.slice children
+# can't be moved into the user manager's slice), so we don't enable lingering here.
 
 log "firewall: deny LAN, allow only DNS + outbound WAN (defense in depth)"
 install -m 0644 "$HERE/nftables.conf" /etc/nftables.conf

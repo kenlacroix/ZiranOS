@@ -129,9 +129,9 @@ isolation still blocks the real pivot, so inspection access doesn't reopen it.
 | Ingress | Cloudflare Tunnel — no open ports, home IP hidden, DDoS-fronted |
 | Network island | VLAN + Proxmox firewall + in-VM `nftables` → **no LAN reachable** |
 | QEMU | `-sandbox on` (seccomp), serial only, no NIC/USB/VGA, unprivileged user, tcg |
-| Resources | per-instance cgroup caps (systemd-run), per-session timeout, concurrency + per-IP + rate caps |
-| Bridge | never shells out with client bytes (argv only); flag via `fw_cfg`, not a shell line |
-| Flag | unique per session, minted server-side, **never committed** (PLAN §3.7) |
+| Resources | service-tree cgroup cap (`MemoryMax`/`CPUQuota` sized below VM RAM — bounds a fleet/runaway so the host survives); per-instance caps if run as root; per-session timeout, concurrency + per-IP + rate caps |
+| Bridge | never shells out with client bytes (argv only); flag via `fw_cfg`, not a shell line; control-channel submits counted toward the input cap + per-session `SUBMIT_MAX` |
+| Flag | unique per session, minted server-side, **never committed**; verified by `sha256`; honeytoken tripwire (PLAN §3.7) |
 
 ## Abuse controls (rate limiting & friends)
 
@@ -154,22 +154,31 @@ public link — it stops floods *before* they cost you a QEMU spawn.
   abandoned tabs); max single-message size (`MAX_MSG_BYTES`); total input cap
   (`MAX_IN_BYTES`); **output backpressure** — a client too slow to drain output is
   killed (`MAX_WS_BACKLOG`) so it can't balloon memory.
+- **control channel** (flag submit) is rate-limited per session (`SUBMIT_MAX`, default
+  30) and its bytes count toward `MAX_IN_BYTES`, so it can't be turned into a
+  CPU/log-flood.
 - **kill switch:** `touch /opt/ziran/PAUSED` to stop accepting new sessions (no
-  restart); **`GET /health`** returns live/total/rejected/paused for monitoring.
+  restart); **`GET /health`** is deliberately minimal in public (`{ok,paused}` only) —
+  set `HEALTH_TOKEN` and query `?token=<it>` for the full live/total/rejected metrics
+  (don't leak the concurrency ceiling / hourly budget as flood-sizing recon).
 
-**Instance / host:** per-QEMU cgroup caps (CPU/mem/tasks via `systemd-run`), the
-sandboxed service tree (`MemoryMax`/`CPUQuota`/`TasksMax` in the unit), and a
-journald size cap so logs can't fill the disk. Consider `fail2ban` on the admin SSH.
+**Instance / host:** the service-tree caps (`MemoryMax`/`CPUQuota`/`TasksMax` in the
+unit, sized **below** VM RAM) bound node + every QEMU together, so a runaway fleet can't
+OOM the host — the bridge logs `caps=tree-only` in this (unprivileged) mode. True
+per-QEMU caps (`systemd-run` scope, `MEM_MAX`/`CPU_QUOTA` each) require running the bridge
+**as root** — a root-free `--user` scope can't work from a system service, so we keep it
+unprivileged and rely on the tree cap. Plus a journald size cap. Consider `fail2ban` on
+the admin SSH (still optional).
 
-Watch it: `curl -s localhost:8080/health | jq` on the VM, or via the jump host.
+Watch it: `curl -s "localhost:8080/health?token=$HEALTH_TOKEN" | jq` on the VM.
 
 ## Config
 
 All via env / the systemd unit's `Environment=` lines (or a drop-in under
 `/etc/systemd/system/ctf-bridge.service.d/`): `PORT`, `KERNEL`, `MAX_CONCURRENT`,
 `MAX_PER_IP`, `SESSION_MS`, `IDLE_MS`, `RATE_MAX`, `HOURLY_BUDGET`, `MAX_MSG_BYTES`,
-`MAX_IN_BYTES`, `MAX_WS_BACKLOG`, `MEM_MB`, `CPU_QUOTA`, `MEM_MAX`, `TURNSTILE_SECRET`,
-`PAUSE_FILE`.
+`MAX_IN_BYTES`, `MAX_WS_BACKLOG`, `SUBMIT_MAX`, `MEM_MB`, `CPU_QUOTA`, `MEM_MAX`,
+`TURNSTILE_SECRET`, `HEALTH_TOKEN`, `PAUSE_FILE`.
 
 ## Honest note
 
