@@ -65,6 +65,16 @@ WAN. Append that file's stanza to `/etc/network/interfaces` on the host, `ifrelo
 -a`, and verify from the VM that `curl https://cloudflare.com` works but a `ping` to
 your NAS times out.
 
+**Simpler alternative — VM on the LAN, egress blocked at the host.** If you'd rather
+keep direct SSH (no jump host) and accept slightly less isolation, put the VM on
+`vmbr0` and use **`proxmox-vm-firewall.fw`** (→ `/etc/pve/firewall/<vmid>.fw`). The
+one rule that makes this safe: the egress block is enforced by the **Proxmox host
+firewall, not inside the VM** — because a compromised (rooted) VM can flush its own
+`nftables`, so the boundary must live outside it. Enable `ipfilter` (in that file) to
+pin the VM to its MAC/IP against ARP/spoof tricks. This is weaker than the island
+(the VM shares your L2 segment) but a sound, common choice at hobby scale — and it
+makes admin/Claude inspection a plain `ssh ctf-admin@<vm-lan-ip>`.
+
 ## Install
 
 ```sh
