@@ -11,6 +11,14 @@ gained, in a system that boots and eventually runs a simple file manager, and in
 an honest public trail of how it was built — including the parts that didn't
 work.
 
+<p align="center">
+  <a href="https://ziranos.pages.dev">
+    <img src="docs/ziran-demo.gif" alt="Ziran OS: a real serial session — help, ps, mem, and walking the on-disk tree with cd/ls/cat" width="720">
+  </a>
+  <br>
+  <em>A real session captured byte-for-byte over serial — <code>ps</code>, <code>mem</code>, and walking the on-disk tree with <code>cd</code>/<code>ls</code>/<code>cat</code>. <a href="https://ziranos.pages.dev">Boot the real kernel live →</a></em>
+</p>
+
 See **[PLAN.md](PLAN.md)** for the full vision, technical decisions, and
 milestone roadmap, and **[STATUS.md](STATUS.md)** for where things actually
 stand right now.
