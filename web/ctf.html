@@ -273,16 +273,27 @@
       '<code>cat /notes.txt</code> prints the file <i>and</i> the flag after it.');
 
     // -- stream the image into the running `load` command --------------------
+    // Feed keystrokes to the guest through xterm. This build of xterm exposes
+    // `paste()` (not the newer `input()`), so prefer paste and fall back.
+    function sendKeys(data) {
+      if (typeof term.paste === 'function') { term.paste(data); }
+      else if (typeof term.input === 'function') { term.input(data); }
+      else { throw new Error('no terminal input method (paste/input) available'); }
+    }
+
     async function typeIntoGuest(b64) {
-      const CHUNK = 16, DELAY = 15;   // ≤ the UART FIFO per burst; cmd_load busy-polls
+      // A newline per chunk flushes the terminal's line discipline (so bytes reach
+      // the guest promptly instead of buffering into one big burst), and `cmd_load`
+      // skips '\r'/'\n' as whitespace — so the newlines are invisible to the image.
+      const CHUNK = 40, DELAY = 20;
       term.focus();
-      term.input('load\r');           // kernel maps \r -> \n -> submit
-      await sleep(200);               // let cmd_load reach its read loop
+      sendKeys('load\r');             // kernel maps \r -> \n -> submit -> cmd_load
+      await sleep(250);               // let cmd_load reach its read loop
       for (let i = 0; i < b64.length; i += CHUNK) {
-        term.input(b64.slice(i, i + CHUNK));
+        sendKeys(b64.slice(i, i + CHUNK) + '\r');
         await sleep(DELAY);
       }
-      term.input('.\r');              // the sentinel that ends the paste
+      sendKeys('.\r');                // the sentinel that ends the paste
     }
 
     document.getElementById('load').onclick = async () => {
