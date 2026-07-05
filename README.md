@@ -281,4 +281,4 @@ sandbox, where QEMU wasn't installable.
 
 ## License
 
-**MIT** — see [LICENSE-MIT](LICENSE-MIT).
+**MIT** — see [LICENSE](LICENSE).

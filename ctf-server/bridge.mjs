@@ -42,8 +42,10 @@ const CTL = Buffer.from('\x00CTL');
 // per-session flag is unaffected — a genuine solver captures it regardless.
 // Shaped exactly like a real per-session flag (all-hex body, so it passes the
 // client's format check and reaches this verifier through the normal submit path).
-const HONEYTOKEN = 'FLAG{ziran-tier2-0000000000dec0de}';
-const HONEYTOKEN_HASH = sha256(HONEYTOKEN);
+// Provided via env (set HONEYTOKEN to an all-hex-bodied decoy flag) so the actual
+// decoy value stays out of the public repo — a scraper can't identify it. Empty = disabled.
+const HONEYTOKEN = process.env.HONEYTOKEN || '';
+const HONEYTOKEN_HASH = HONEYTOKEN ? sha256(HONEYTOKEN) : null;
 
 const int = (v, d) => (v === undefined ? d : Number(v));
 const CONFIG = {
@@ -235,7 +237,7 @@ wss.on('connection', async (ws, req) => {
     if (msg?.type !== 'submit' || typeof msg.flag !== 'string') return;
     const h = sha256(msg.flag.trim());
     if (h === flagHash) { log('submit: CORRECT'); sendCtl({ type: 'verify', result: 'correct' }); }
-    else if (h === HONEYTOKEN_HASH) { log('submit: HONEYTOKEN (shortcut/scrape — rejected)'); sendCtl({ type: 'verify', result: 'honeytoken' }); }
+    else if (HONEYTOKEN_HASH && h === HONEYTOKEN_HASH) { log('submit: HONEYTOKEN (shortcut/scrape — rejected)'); sendCtl({ type: 'verify', result: 'honeytoken' }); }
     else { log('submit: incorrect'); sendCtl({ type: 'verify', result: 'incorrect' }); }
   };
 
