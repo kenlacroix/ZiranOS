@@ -415,6 +415,7 @@
           <button class="btn" id="restart">↺ Restart</button>
           <button class="btn" id="boot-real" hidden title="Runs real QEMU compiled to WebAssembly (~46 MB) to boot the actual 64-bit kernel — not a replay. Needs the qemu-wasm assets in web/ and cross-origin-isolation headers (make serve). See docs/planning/web-live-boot-qemu-wasm.md.">▸ Boot the real kernel (~46 MB)</button>
           <a class="btn" href="replay.html" title="A real recording of the actual kernel captured over serial — boot, ps, mem, ls, cd, cat">▸ Watch a real session</a>
+          <a class="btn" href="ctf.html" title="Craft a filesystem image and make the running kernel leak a hidden flag — the Tier-1 CTF, live in your browser">🚩 Filesystem CTF</a>
           <span class="badge" id="hint" style="align-self:center">click the screen, then type</span>
         </div>
       </div>
@@ -597,6 +598,7 @@ make debug      # boot frozen, attach GDB</code>
 
   <footer>
     <div><span class="mono">自然 · Ziran OS</span> — “self-so,” that which arises without external forcing. A hobby OS built to understand every layer, and a tool built to teach them.</div>
+    <div style="margin-top:.5rem;opacity:.75">Built by <a href="https://www.kennethlacroix.me" target="_blank" rel="noopener">Kenneth LaCroix</a> · <a href="https://github.com/kenlacroix/ZiranOS" target="_blank" rel="noopener">source on GitHub</a></div>
   </footer>
 </main>
 
