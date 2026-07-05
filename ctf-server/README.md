@@ -79,6 +79,28 @@ systemctl start ctf-bridge && journalctl -u ctf-bridge -f
 `setup-vm.sh` installs QEMU + Node + cloudflared, creates an unprivileged `ctf`
 user, loads the firewall, and installs the sandboxed `ctf-bridge` systemd service.
 
+## Admin / Claude inspection access
+
+You want to inspect the VM — but that's **inbound** (you → VM), a different direction
+from the **outbound** VM → LAN pivot the island blocks. Allowing the first does *not*
+reopen the second (stateful firewall: replies ride the established connection; the VM
+still can't *initiate* to your LAN). So keep the island and add inbound admin only.
+
+With the NAT'd design the VM has no LAN IP, so reach it through the **Proxmox host as
+a jump host** — no port-forward, no new exposure:
+
+```sh
+ssh -J root@<proxmox-lan-ip> ctf-admin@10.66.66.2
+```
+
+`nftables.conf` already allows SSH only from the gateway `10.66.66.1` (where the jump
+exits). Authorize your workstation's key on the VM's `ctf-admin` user (setup-vm.sh
+prints the steps). **For Claude to inspect it non-interactively**, make every hop
+key-based (your agent is forwarded by ProxyJump); then a session on your machine can
+run e.g. `ssh -J root@<proxmox> ctf-admin@10.66.66.2 'journalctl -u ctf-bridge -n50'`.
+Caveat: don't blindly trust a *compromised* VM's output in your shell — but the
+isolation still blocks the real pivot, so inspection access doesn't reopen it.
+
 ## Defenses in place
 
 | Layer | Control |
