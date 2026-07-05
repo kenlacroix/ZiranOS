@@ -40,7 +40,9 @@ const CTL = Buffer.from('\x00CTL');
 // repo / page instead of landing the exploit. Submitting it is rejected AND logged:
 // a tripwire that yields signal (someone took the shortcut), not secrecy. The real
 // per-session flag is unaffected — a genuine solver captures it regardless.
-const HONEYTOKEN = 'FLAG{ziran-tier2-000000000000d0cy}';
+// Shaped exactly like a real per-session flag (all-hex body, so it passes the
+// client's format check and reaches this verifier through the normal submit path).
+const HONEYTOKEN = 'FLAG{ziran-tier2-0000000000dec0de}';
 const HONEYTOKEN_HASH = sha256(HONEYTOKEN);
 
 const int = (v, d) => (v === undefined ? d : Number(v));
