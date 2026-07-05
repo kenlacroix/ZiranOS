@@ -443,11 +443,34 @@
         <span class="tag">every claim links to <b>real source</b></span>
         <span class="tag">🚩 <a href="ctf.html" style="text-decoration:none">a live <b>CTF</b> to attack it</a></span>
       </div>
+      <div style="margin-top:1.1rem">
+        <a class="btn primary" href="#screen" style="text-decoration:none">▸ Boot it in this tab</a>
+      </div>
     </div>
   </div>
 </header>
 
 <main class="wrap">
+  <!-- ATTACK IT — surface the CTF near the top -->
+  <style>
+    .attack{margin:1.6rem 0 .4rem}
+    .attack h2{font-size:1.1rem;margin:0 0 .7rem}
+    .attack-cards{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
+    .attack-card{border:1px solid #2a3142;border-radius:10px;padding:1rem 1.15rem;background:#11161b;color:#cdd6f4;text-decoration:none;transition:border-color .15s,transform .15s}
+    .attack-card:hover{border-color:#89b4fa;transform:translateY(-2px)}
+    .attack-card b{display:block;font-size:1.12rem;margin-bottom:.35rem}
+    .attack-card p{margin:0;font-size:.92rem;opacity:.82;line-height:1.45}
+    .attack-card code{color:#a6e3a1}
+    @media(max-width:700px){.attack-cards{grid-template-columns:1fr}}
+  </style>
+  <section class="attack">
+    <h2>Or skip the tour and attack it &rarr;</h2>
+    <div class="attack-cards">
+      <a class="attack-card" href="ctf.html"><b>🚩 Tier 1 — break it in your tab</b><p>Craft a disk image that makes the kernel's own filesystem hand you a flag <code>ls</code> can't see. White-box practice — the flag's yours, so iterate freely.</p></a>
+      <a class="attack-card" href="ctf-remote.html"><b>🌐 Tier 2 — steal a live server's flag</b><p>A per-session flag lives only in a running server's RAM — not in this page or the repo. Land the same exploit over the wire to capture it.</p></a>
+    </div>
+  </section>
+
   <!-- WHY THIS EXISTS / ANTI-SLOP -->
   <section class="why">
     <div class="why-in">
@@ -494,9 +517,9 @@
           <div class="vig"></div>
         </div>
         <div class="controls">
-          <button class="btn primary" id="boot">▸ Boot</button>
+          <button class="btn" id="boot">▸ Replay boot</button>
           <button class="btn" id="restart">↺ Restart</button>
-          <a class="btn" id="boot-real" href="qemu-wasm.html" target="_blank" rel="noopener" title="Runs real QEMU compiled to WebAssembly to boot the actual 64-bit kernel to an interactive shell — not a replay. One-time ~5 MB download.">▸ Boot the real kernel (~5 MB)</a>
+          <a class="btn primary" id="boot-real" href="qemu-wasm.html" target="_blank" rel="noopener" title="Runs real QEMU compiled to WebAssembly to boot the actual 64-bit kernel to an interactive shell — not a replay. One-time ~5 MB download.">▸ Boot the real kernel (~5 MB)</a>
           <a class="btn" href="replay.html" title="A real recording of the actual kernel captured over serial — boot, ps, mem, ls, cd, cat">▸ Watch a real session</a>
           <a class="btn" href="ctf.html" title="Craft a filesystem image and make the running kernel leak a hidden flag — the Tier-1 CTF, live in your browser">🚩 Filesystem CTF</a>
           <a class="btn" href="ctf-remote.html" title="The remote capture: a per-session flag lives only in a server's RAM — steal it over the wire. Tier 2.">🌐 Remote capture (Tier 2)</a>

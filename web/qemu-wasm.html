@@ -32,6 +32,8 @@
     code { color:#a6e3a1; } a { color:#89b4fa; }
     #terminal { height:78vh; margin-top:.5rem; }
     #status { font-size:.8rem; opacity:.6; margin-top:.4rem; }
+    .mobile-only { display:none; }
+    @media (max-width:700px) { .mobile-only { display:block; } }
   </style>
 </head>
 <body>
@@ -43,6 +45,9 @@
     <code>ls</code> · <code>cd docs</code> · <code>cat filesystem.txt</code>.
     <a href="./index.html">&larr; guided tour</a> ·
     <a href="./ctf.html">🚩 try the filesystem CTF</a>
+  </p>
+  <p class="note mobile-only" style="color:#f9e2af;border-left:2px solid #f9e2af;padding-left:.6rem;margin-top:.6rem">
+    📱 This runs best on a desktop — the interactive terminal is 100 columns wide and awkward to use on a phone.
   </p>
   <div id="terminal" role="application" aria-label="Ziran OS live kernel terminal — click, then type commands"></div>
   <div id="status" role="status" aria-live="polite">loading…</div>
