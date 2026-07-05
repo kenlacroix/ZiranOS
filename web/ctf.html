@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ziran OS — Filesystem CTF (Tier 1)</title>
+  <!-- xterm.css vendored locally: COEP: require-corp blocks cross-origin CDN loads. -->
+  <link rel="stylesheet" href="./vendor/xterm.css">
+  <style>
+    :root { color-scheme: dark; }
+    body { background:#0b0e14; color:#cdd6f4; font-family:system-ui,sans-serif;
+           margin:0; padding:1rem 1.25rem 4rem; line-height:1.5; }
+    h1 { font-size:1.15rem; margin:.2rem 0; }
+    h2 { font-size:1rem; margin:1.4rem 0 .4rem; color:#f9e2af; }
+    p, li { max-width:74ch; }
+    .note { opacity:.8; font-size:.88rem; }
+    code, kbd { color:#a6e3a1; font-family:ui-monospace,monospace; }
+    a { color:#89b4fa; }
+    #terminal { height:60vh; margin-top:.5rem; }
+    #status { font-size:.8rem; opacity:.65; margin-top:.4rem; min-height:1.2em; }
+    .panel { background:#11151f; border:1px solid #1e2536; border-radius:8px;
+             padding:.9rem 1rem; margin-top:1rem; }
+    textarea { width:100%; box-sizing:border-box; height:6.5rem; resize:vertical;
+               background:#0b0e14; color:#cdd6f4; border:1px solid #313a52;
+               border-radius:6px; font-family:ui-monospace,monospace; font-size:.8rem;
+               padding:.5rem; }
+    .row { display:flex; flex-wrap:wrap; gap:.5rem; align-items:center; margin:.5rem 0; }
+    label { font-size:.85rem; }
+    input[type=text] { background:#0b0e14; color:#cdd6f4; border:1px solid #313a52;
+                       border-radius:6px; padding:.35rem .5rem; font-family:ui-monospace,monospace; }
+    button { background:#1e2536; color:#cdd6f4; border:1px solid #45507a;
+             border-radius:6px; padding:.45rem .8rem; font-size:.85rem; cursor:pointer; }
+    button:hover { background:#28304a; }
+    button.primary { background:#3651a8; border-color:#5670d0; }
+    button:disabled { opacity:.5; cursor:default; }
+    details { margin:.5rem 0; border-left:2px solid #313a52; padding-left:.8rem; }
+    summary { cursor:pointer; color:#89b4fa; font-size:.92rem; }
+    .banner { background:#2a1e1e; border:1px solid #6d3b3b; border-radius:8px;
+              padding:.7rem .9rem; font-size:.85rem; }
+    .ok { color:#a6e3a1; } .warn { color:#f9e2af; } .dim { opacity:.7; }
+  </style>
+</head>
+<body>
+  <h1>Ziran OS — Filesystem CTF <span class="dim">· Tier 1 (in-browser)</span></h1>
+  <p class="note">
+    A real from-scratch 64-bit kernel is booting below — <b>QEMU compiled to
+    WebAssembly</b>, not a replay. Its RAM disk hides a <code>FLAG{…}</code> in bytes
+    with <b>no directory entry</b>: <code>ls</code> will never show it, and
+    <code>cat</code> can't name it. Your job is to make the filesystem hand it to you
+    anyway — by crafting a disk image whose own rules betray it.
+    <a href="./index.html">← the guided tour</a> ·
+    <a href="./qemu-wasm.html">plain live boot</a>
+  </p>
+
+  <div class="banner">
+    <b>This is a white-box sandbox, on purpose.</b> The flag lives in <i>your</i>
+    browser tab's memory, so yes — DevTools or <code>strings</code> would find it in
+    seconds. That's not cheating you out of anything: the point here is to learn the
+    <i>exploit primitive</i>, not to keep a secret. The version where the flag is
+    genuinely out of reach (server-side, only extractable by landing the exploit for
+    real) is <b>Tier 2</b> — see the last section.
+  </div>
+
+  <div id="terminal"></div>
+  <div id="status">loading…</div>
+
+  <!-- ------------------------------------------------------------------ -->
+  <!-- Challenge controls: build an image, then stream it into `load`.     -->
+  <!-- ------------------------------------------------------------------ -->
+  <div class="panel">
+    <h2 style="margin-top:.2rem">1 · Build a disk image</h2>
+    <p class="note">
+      The kernel's <code>load</code> command mounts a base64 image you paste in. Start
+      from the presets — each one rebuilds the base64 below and explains what it does.
+      Then hit <b>Load into the kernel</b> and try <code>ls /</code> and
+      <code>cat /notes.txt</code>.
+    </p>
+    <div class="row">
+      <label>secret planted on the disk:
+        <input id="secret" type="text" size="34" value="FLAG{practice_flag_public_by_design}">
+      </label>
+    </div>
+    <div class="row">
+      <button id="p-honest">① Honest disk</button>
+      <button id="p-blocked">② Over-long extent, honest <code>data_end</code></button>
+      <button class="primary" id="p-exploit">③ Forge <code>data_end</code> + stretch — the leak</button>
+    </div>
+    <p class="note" id="preset-desc" style="min-height:2.4em">
+      ① A normal, well-formed disk with two files. The secret sits past
+      <code>data_end</code>, unlisted — <code>ls</code> won't show it and a normal
+      <code>cat</code> can't reach it.
+    </p>
+    <textarea id="image" spellcheck="false" placeholder="base64 image (or paste your own)"></textarea>
+    <div class="row">
+      <button class="primary" id="load">Load into the kernel ▸</button>
+      <span class="note" id="load-status"></span>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2 style="margin-top:.2rem">2 · Walkthrough <span class="dim">(spoilers — try it first)</span></h2>
+
+    <details>
+      <summary>How the disk is laid out</summary>
+      <p class="note">
+        ZranFS v3 is dead simple. A <b>16-byte superblock</b>:
+        <code>"ZRFS"</code>, version <code>3</code>, a file count, the
+        <code>total_size</code> (must equal the image length), and a
+        <code>data_end</code> — the declared ceiling of the "real" data region. Then a
+        table of <b>32-byte directory entries</b> (a 20-byte name, then a 32-bit
+        <code>offset</code>, <code>length</code>, and <code>kind</code>). Then the file
+        bytes. The flag is appended <i>after</i> <code>data_end</code>, with no entry
+        pointing at it.
+      </p>
+    </details>
+
+    <details>
+      <summary>Where the bug is</summary>
+      <p class="note">
+        The strict reader (<code>Fs::mount</code>) does confine every file's extent to
+        <code>[.., data_end)</code> — so an entry can't normally reach the flag past it.
+        <b>But <code>data_end</code> is a field inside the image, and you supply the whole
+        image, superblock included.</b> Validating an extent against a number the
+        attacker also controls isn't validation. Preset ② proves the confinement is
+        real (an over-long extent with an <i>honest</i> <code>data_end</code> is
+        rejected — <code>ExtentEscapesData</code>). Preset ③ removes the guard by lying.
+      </p>
+    </details>
+
+    <details>
+      <summary>The exploit</summary>
+      <p class="note">
+        Forge <code>data_end = total_size</code> (now the whole image counts as "data"),
+        and stretch a listed file's <code>length</code> so its extent runs off the end of
+        its own bytes and over the flag region. Mount passes every check — because you
+        moved the ceiling — and <code>cat /notes.txt</code> zero-copies from its declared
+        <code>offset</code> for its declared <code>length</code>: its own bytes, then
+        everything after them, <i>including the flag</i>. That's preset ③. One dishonest
+        field turns a bounds check into an out-of-bounds read.
+      </p>
+    </details>
+
+    <details>
+      <summary>Why this is a sandbox — and what Tier 2 is</summary>
+      <p class="note">
+        Everything here runs in your tab, so the flag was always in your reach; the
+        lesson is the <i>primitive</i>, not the secret. <b>Tier 2</b> makes it a real
+        capture: the kernel runs on a server, the flag lives only in that process's RAM
+        (never in this page, never in git), and the only way to get it is to land this
+        same exploit over the wire — develop it here, capture it there. That's the
+        version worth bragging about.
+      </p>
+    </details>
+  </div>
+
+  <script type="module">
+    // Vendored locally (see build-qemu-wasm.sh) so they load under COEP.
+    import './vendor/xterm.js';       // window.Terminal
+    import './vendor/xterm-pty.js';   // window.openpty
+
+    // -- asset base (same wiring as qemu-wasm.html) --------------------------
+    const ASSET_BASE = './';
+    const qp = new URLSearchParams(location.search).get('assets');
+    const BASE = (qp || ASSET_BASE).replace(/\/?$/, '/');
+    const status = (t) => { document.getElementById('status').textContent = t; };
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+    window.Module = window.Module || {};
+    Module['arguments'] = [
+      '-nographic', '-m', '128M', '-L', 'pack/',
+      '-kernel', '/kernel-v86.bin',   // flat MB1 kernel (see qemu-wasm.html)
+      '-nic', 'none', '-accel', 'tcg,tb-size=500', '-no-reboot',
+    ];
+    Module['locateFile'] = (path) => BASE + path;
+    Module['mainScriptUrlOrBlob'] = BASE + 'out.js';
+
+    const term = new Terminal({ cols: 100, rows: 26, convertEol: true });
+    term.open(document.getElementById('terminal'));
+    term.focus();
+    const { master, slave } = openpty();
+    term.loadAddon(master);
+    Module['pty'] = slave;
+    Module['setStatus'] = (t) => { if (t) status(t); };
+    Module['onExit'] = () => status('guest halted.');
+
+    function loadScript(src) {
+      return new Promise((res, rej) => {
+        const s = document.createElement('script');
+        s.src = src; s.onload = res; s.onerror = () => rej(new Error('failed to load ' + src));
+        document.head.appendChild(s);
+      });
+    }
+
+    (async () => {
+      status('loading kernel …');
+      const kbytes = new Uint8Array(await (await fetch('./kernel-v86.bin')).arrayBuffer());
+      Module['preRun'] = [() => Module.FS.writeFile('/kernel-v86.bin', kbytes)];
+      status('loading emulator from ' + BASE + ' …');
+      await loadScript(BASE + 'load.js');
+      const initEmscriptenModule = (await import(BASE + 'out.js')).default;
+      await initEmscriptenModule(Module);
+      if (Module['TTY'] && Module['TTY'].stream_ops) {
+        const oldPoll = Module['TTY'].stream_ops.poll;
+        Module['TTY'].stream_ops.poll = (stream) => oldPoll.call(stream, 0);
+      }
+      status('running — click the terminal, or use the buttons below.');
+    })().catch((e) => { status('boot error: ' + e); term.write('\r\n[boot error] ' + e + '\r\n'); });
+
+    // -- ZranFS v3 image builder (mirrors src/fs.rs boot_image / format) ------
+    // NOTE (pre-launch): verify one round-trip against the live kernel — load the
+    // "honest" preset and confirm `ls /` shows both files — before publishing.
+    const enc = new TextEncoder();
+    const le16 = (v) => [v & 255, (v >> 8) & 255];
+    const le32 = (v) => [v & 255, (v >> 8) & 255, (v >> 16) & 255, (v >> 24) & 255];
+    const FILES = [
+      { name: 'notes.txt', content: 'nothing to see here.\n' },
+      { name: 'readme.md', content: 'a disk you uploaded yourself.\n' },
+    ];
+    const DIRENT = 32, SB = 16, KIND_FILE = 0;
+
+    // forgeDataEnd: set data_end = total_size (the lie). stretch: override file 0's
+    // length to reach the end of the image (over the secret). Returns a Uint8Array.
+    function buildImage({ forgeDataEnd, stretch, secret }) {
+      const fb = FILES.map((f) => enc.encode(f.content));
+      const sb = enc.encode(secret);
+      const dataStart = SB + FILES.length * DIRENT;
+      let off = dataStart;
+      const ext = fb.map((b) => { const e = { off, len: b.length }; off += b.length; return e; });
+      const honestDataEnd = off;          // end of the legit file bytes
+      const secretOff = off;              // the flag sits right after data_end
+      const total = off + sb.length;      // image ends after the flag
+      const buf = new Uint8Array(total);
+      buf.set(enc.encode('ZRFS'), 0);
+      buf.set(le16(3), 4);
+      buf.set(le16(FILES.length), 6);
+      buf.set(le32(total), 8);
+      buf.set(le32(forgeDataEnd ? total : honestDataEnd), 12);
+      FILES.forEach((f, i) => {
+        const base = SB + i * DIRENT;
+        buf.set(enc.encode(f.name).slice(0, 20), base);           // NUL-padded (buf is zeroed)
+        // The crafted extent: file 0 stretched to cover its data + the trailing flag.
+        const len = (stretch && i === 0) ? (total - ext[i].off) : ext[i].len;
+        buf.set(le32(ext[i].off), base + 20);
+        buf.set(le32(len), base + 24);
+        buf.set(le32(KIND_FILE), base + 28);
+      });
+      fb.forEach((b, i) => buf.set(b, ext[i].off));
+      buf.set(sb, secretOff);
+      return buf;
+    }
+
+    const toB64 = (u8) => { let s = ''; for (const b of u8) s += String.fromCharCode(b); return btoa(s); };
+    const secretEl = () => document.getElementById('secret').value || 'FLAG{practice}';
+
+    function setPreset(opts, desc) {
+      document.getElementById('image').value = toB64(buildImage({ ...opts, secret: secretEl() }));
+      document.getElementById('preset-desc').innerHTML = desc;
+    }
+    document.getElementById('p-honest').onclick = () => setPreset(
+      { forgeDataEnd: false, stretch: false },
+      '① A normal, well-formed disk. The secret is past <code>data_end</code>, ' +
+      'unlisted — <code>ls /</code> shows only the two files, and there is no way to ' +
+      '<code>cat</code> the flag.');
+    document.getElementById('p-blocked').onclick = () => setPreset(
+      { forgeDataEnd: false, stretch: true },
+      '② The <b>same over-long extent</b> as the exploit, but <code>data_end</code> is ' +
+      'left honest. <code>load</code> should <b>reject</b> it — <code>ExtentEscapesData</code> ' +
+      '— proving the confinement is real when the ceiling is honest.');
+    document.getElementById('p-exploit').onclick = () => setPreset(
+      { forgeDataEnd: true, stretch: true },
+      '③ <b>The leak.</b> <code>data_end</code> is forged to <code>total_size</code> and ' +
+      "<code>notes.txt</code>'s extent is stretched over the flag. It mounts — then " +
+      '<code>cat /notes.txt</code> prints the file <i>and</i> the flag after it.');
+
+    // -- stream the image into the running `load` command --------------------
+    async function typeIntoGuest(b64) {
+      const CHUNK = 16, DELAY = 15;   // ≤ the UART FIFO per burst; cmd_load busy-polls
+      term.focus();
+      term.input('load\r');           // kernel maps \r -> \n -> submit
+      await sleep(200);               // let cmd_load reach its read loop
+      for (let i = 0; i < b64.length; i += CHUNK) {
+        term.input(b64.slice(i, i + CHUNK));
+        await sleep(DELAY);
+      }
+      term.input('.\r');              // the sentinel that ends the paste
+    }
+
+    document.getElementById('load').onclick = async () => {
+      const b64 = document.getElementById('image').value.replace(/\s+/g, '');
+      const btn = document.getElementById('load');
+      const st = document.getElementById('load-status');
+      if (!b64) { st.textContent = 'nothing to load — pick a preset first.'; return; }
+      btn.disabled = true;
+      st.innerHTML = '<span class="warn">streaming ' + b64.length + ' base64 chars…</span>';
+      try {
+        await typeIntoGuest(b64);
+        st.innerHTML = '<span class="ok">sent.</span> now try <code>ls /</code> then ' +
+                       '<code>cat /notes.txt</code> in the terminal.';
+      } catch (e) {
+        st.textContent = 'inject failed: ' + e;
+      } finally { btn.disabled = false; }
+    };
+
+    // Seed the textarea with the honest disk so there's something to load on arrival.
+    window.addEventListener('load', () => document.getElementById('p-honest').click());
+  </script>
+</body>
+</html>
