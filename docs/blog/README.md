@@ -23,6 +23,9 @@ story is the honest and interesting part — not "it works now."
 | 15 | [The confused deputy](15-the-confused-deputy.md) | M15 break the privilege boundary (security) | drafted |
 | 16 | [Attacking the lies about disk layout](16-attacking-the-lies-about-disk-layout.md) | M16 break the filesystem boundary (security) | drafted |
 | 14 | [Hello over a socket that isn't](14-hello-over-a-socket-that-isnt.md) | M14 networking stub (loopback) | drafted |
+| 17 | [You can boot it in your browser now](17-boot-it-in-your-browser.md) | delivery — live browser boot (qemu-wasm) | drafted |
+| 18 | [A CTF against my own kernel](18-a-ctf-against-my-own-kernel.md) | delivery — Tier-1 in-browser filesystem CTF | drafted |
+| 19 | [A remote pwn target](19-a-remote-pwn-target.md) | delivery — Tier-2 remote capture | drafted |
 | ✦ | [What I actually learned building an OS with AI](a-what-i-learned-building-an-os-with-ai.md) | capstone reflection (M0–12) | drafted |
 
 Posts are employer-agnostic and people-agnostic, matching the rest of the blog.
