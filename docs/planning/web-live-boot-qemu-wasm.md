@@ -111,7 +111,7 @@ the host docker socket), `git`, `curl`.
 # deps (Debian/Ubuntu): docker.io git curl + the ISO toolchain, native names:
 #   nasm binutils grub-pc-bin grub-common xorriso  + rustup
 rustup target add x86_64-unknown-none
-git clone <repo> ziran && cd ziran && git checkout claude/ziran-os-plan-qgobid
+git clone https://github.com/kenlacroix/ZiranOS ziran && cd ziran
 make web                     # native ld/objcopy/grub-mkrescue — NO x86_64-elf- prefixes on Linux
 ./web/build-qemu-wasm.sh     # long on a slow CPU, but it completes
 ```
