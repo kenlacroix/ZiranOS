@@ -1,30 +1,35 @@
-# Cloudflare Pages / Netlify headers for the Ziran OS web tool.
-#
-# The two cross-origin-isolation headers are what let the live qemu-wasm boot run
-# (SharedArrayBuffer needs an isolated context). GitHub Pages can't set these —
-# that's why this project hosts on Cloudflare Pages. Safe to apply site-wide: the
-# tour loads no cross-origin resources (v86 and xterm are self-hosted), so nothing
-# breaks under COEP: require-corp.
+# Cloudflare Pages headers for the Ziran OS web tool.
+
+# Site-wide safe defaults.
 /*
-  Cross-Origin-Opener-Policy: same-origin
-  Cross-Origin-Embedder-Policy: require-corp
-  Cross-Origin-Resource-Policy: same-origin
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
 
-# The Tier-2 remote-capture page uses no wasm/SharedArrayBuffer (just xterm + a
-# WebSocket), so it doesn't need cross-origin isolation — and COEP would block the
-# cross-origin Cloudflare Turnstile script/iframe. Turn COEP off for this page only
-# (a later, more specific rule overrides the site-wide COEP above).
-/ctf-remote
-  Cross-Origin-Embedder-Policy: unsafe-none
-/ctf-remote.html
-  Cross-Origin-Embedder-Policy: unsafe-none
+# Cross-origin isolation (COOP + COEP) enables the SharedArrayBuffer the qemu-wasm /
+# v86 boot needs. Applied ONLY to the pages that run an emulator — NOT to
+# /ctf-remote (no wasm; must load the cross-origin Cloudflare Turnstile widget, which
+# COEP would block) and NOT to /replay. Same-origin assets (out.js/.wasm/.data/…)
+# load fine under COEP without CORP, so no per-asset CORP is needed.
+/
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: require-corp
+/index.html
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: require-corp
+/ctf
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: require-corp
+/ctf.html
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: require-corp
+/qemu-wasm
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: require-corp
+/qemu-wasm.html
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: require-corp
 
-# The big emulator payloads change only on a rebuild — cache them hard. If you
-# rebuild and need clients to refetch, purge the Cloudflare cache (or hard-reload).
-# Emscripten keeps the qemu-system-x86_64.* names (baked into out.js); those are the
-# real deployed filenames, NOT out.wasm/out.data — cache the names that exist.
+# Big emulator payloads change only on a rebuild — cache hard.
 /qemu-system-x86_64.wasm
   Cache-Control: public, max-age=604800
 /qemu-system-x86_64.data
@@ -37,8 +42,6 @@
   Cache-Control: public, max-age=604800
 /v86.wasm
   Cache-Control: public, max-age=604800
-
-# Icons and the social image are stable — cache a day.
 /favicon.svg
   Cache-Control: public, max-age=86400
 /apple-touch-icon.png
