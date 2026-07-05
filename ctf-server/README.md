@@ -122,11 +122,43 @@ isolation still blocks the real pivot, so inspection access doesn't reopen it.
 | Bridge | never shells out with client bytes (argv only); flag via `fw_cfg`, not a shell line |
 | Flag | unique per session, minted server-side, **never committed** (PLAN §3.7) |
 
+## Abuse controls (rate limiting & friends)
+
+Defense in depth, outermost first. The edge layer is the highest-leverage for a
+public link — it stops floods *before* they cost you a QEMU spawn.
+
+**Cloudflare edge** (in the dashboard; free tier — the tunnel already fronts it):
+- **Turnstile** (recommended) — a human check before a session opens. Add the widget
+  to the client, and set `TURNSTILE_SECRET` on the bridge; it verifies `?t=<token>`
+  server-side and refuses to spawn without a valid one. Kills bot floods cold.
+- **Rate-limiting rule** — cap requests per IP to the WS path at the edge.
+- **Bot Fight Mode**, WAF managed rules, geo/ASN block, and **Under Attack Mode** as
+  a break-glass.
+
+**Bridge / per connection** (built into `bridge.mjs`, all env-tunable):
+- concurrency cap (`MAX_CONCURRENT`), per-IP live cap (`MAX_PER_IP`), new-session
+  rate limit (`RATE_MAX`/`RATE_WINDOW_MS`), and a global **hourly spawn budget**
+  circuit breaker (`HOURLY_BUDGET`).
+- hard session timeout (`SESSION_MS`) **and** idle timeout (`IDLE_MS`, reclaims
+  abandoned tabs); max single-message size (`MAX_MSG_BYTES`); total input cap
+  (`MAX_IN_BYTES`); **output backpressure** — a client too slow to drain output is
+  killed (`MAX_WS_BACKLOG`) so it can't balloon memory.
+- **kill switch:** `touch /opt/ziran/PAUSED` to stop accepting new sessions (no
+  restart); **`GET /health`** returns live/total/rejected/paused for monitoring.
+
+**Instance / host:** per-QEMU cgroup caps (CPU/mem/tasks via `systemd-run`), the
+sandboxed service tree (`MemoryMax`/`CPUQuota`/`TasksMax` in the unit), and a
+journald size cap so logs can't fill the disk. Consider `fail2ban` on the admin SSH.
+
+Watch it: `curl -s localhost:8080/health | jq` on the VM, or via the jump host.
+
 ## Config
 
 All via env / the systemd unit's `Environment=` lines (or a drop-in under
 `/etc/systemd/system/ctf-bridge.service.d/`): `PORT`, `KERNEL`, `MAX_CONCURRENT`,
-`MAX_PER_IP`, `SESSION_MS`, `RATE_MAX`, `MEM_MB`, `CPU_QUOTA`, `MEM_MAX`.
+`MAX_PER_IP`, `SESSION_MS`, `IDLE_MS`, `RATE_MAX`, `HOURLY_BUDGET`, `MAX_MSG_BYTES`,
+`MAX_IN_BYTES`, `MAX_WS_BACKLOG`, `MEM_MB`, `CPU_QUOTA`, `MEM_MAX`, `TURNSTILE_SECRET`,
+`PAUSE_FILE`.
 
 ## Honest note
 

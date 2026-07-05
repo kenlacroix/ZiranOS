@@ -21,6 +21,14 @@ Environment=KERNEL=/opt/ziran/kernel-v86.bin
 Environment=MAX_CONCURRENT=12
 Environment=MAX_PER_IP=2
 Environment=SESSION_MS=180000
+Environment=IDLE_MS=90000
+Environment=RATE_MAX=10
+Environment=HOURLY_BUDGET=1000
+# Optional human gate: set to your Cloudflare Turnstile SECRET key to require a
+# challenge before any session spawns. Leave empty to disable.
+Environment=TURNSTILE_SECRET=
+# Kill switch: `touch /opt/ziran/PAUSED` to stop accepting new sessions (no restart).
+Environment=PAUSE_FILE=/opt/ziran/PAUSED
 
 # --- sandboxing the bridge process itself (it still spawns QEMU) ---
 NoNewPrivileges=true
