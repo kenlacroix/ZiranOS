@@ -20,7 +20,7 @@
 
 import { WebSocketServer } from 'ws';
 import { createServer } from 'node:http';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 
@@ -106,18 +106,30 @@ function buildQemuArgs(flag) {
     '-fw_cfg', `name=opt/flag,string=${flag}`,   // server-controlled; never client input
   ];
 }
+// Probe ONCE whether we can wrap QEMU in a systemd-run scope for per-instance
+// cgroup caps. As an unprivileged service user this fails with "Interactive
+// authentication required" (creating a system scope needs polkit/root) — and that
+// is a *runtime* failure of systemd-run, not a spawn error, so it can't be caught
+// per-launch. If it doesn't work we spawn QEMU directly: the service-tree caps
+// (MemoryMax/CPUQuota/TasksMax in the unit) + `-m` per instance + MAX_CONCURRENT
+// still bound the box. Run the bridge as root to get the per-instance caps.
+const USE_SYSTEMD_RUN = (() => {
+  try {
+    return spawnSync('systemd-run', ['--scope', '--quiet', '--', 'true'],
+      { stdio: 'ignore', timeout: 5000 }).status === 0;
+  } catch { return false; }
+})();
+
 function spawnQemu(flag) {
   const qargs = buildQemuArgs(flag);
-  // Per-instance cgroup caps via systemd-run when present; else a bare spawn.
-  try {
+  if (USE_SYSTEMD_RUN) {
     return spawn('systemd-run', [
       '--scope', '--quiet', '--collect',
       '-p', `MemoryMax=${CONFIG.MEM_MAX}`, '-p', `CPUQuota=${CONFIG.CPU_QUOTA}`, '-p', 'TasksMax=96',
       '--', CONFIG.QEMU, ...qargs,
     ], { stdio: ['pipe', 'pipe', 'pipe'] });
-  } catch {
-    return spawn(CONFIG.QEMU, qargs, { stdio: ['pipe', 'pipe', 'pipe'] });
   }
+  return spawn(CONFIG.QEMU, qargs, { stdio: ['pipe', 'pipe', 'pipe'] });
 }
 
 // ---- HTTP server: /health for monitoring; the WS upgrades on the same port ------
@@ -138,7 +150,8 @@ server.listen(CONFIG.PORT, CONFIG.HOST, () => {
   console.log(`[bridge] listening ${CONFIG.HOST}:${CONFIG.PORT}  kernel=${CONFIG.KERNEL}`);
   console.log(`[bridge] caps: total=${CONFIG.MAX_CONCURRENT} per-ip=${CONFIG.MAX_PER_IP} ` +
     `session=${CONFIG.SESSION_MS}ms idle=${CONFIG.IDLE_MS}ms rate=${CONFIG.RATE_MAX}/${CONFIG.RATE_WINDOW_MS}ms ` +
-    `hourly=${CONFIG.HOURLY_BUDGET} turnstile=${CONFIG.TURNSTILE_SECRET ? 'on' : 'off'}`);
+    `hourly=${CONFIG.HOURLY_BUDGET} turnstile=${CONFIG.TURNSTILE_SECRET ? 'on' : 'off'} ` +
+    `sandbox=${USE_SYSTEMD_RUN ? 'systemd-run' : 'direct'}`);
 });
 
 wss.on('connection', async (ws, req) => {
