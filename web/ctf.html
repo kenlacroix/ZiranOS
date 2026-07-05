@@ -227,6 +227,32 @@
         against the per-session offset the remote kernel prints for your instance.
       </p>
     </details>
+    <details>
+      <summary>Scope — what this proves, what it doesn't, and where to learn more</summary>
+      <p class="note">
+        Be clear-eyed: this is <b>one</b> vulnerability class — a bounds check that trusts a
+        length <i>you</i> supply, so a read runs past a logical fence (<code>data_end</code>)
+        into bytes it shouldn't return: a classic
+        <a href="https://cwe.mitre.org/data/definitions/125.html" target="_blank" rel="noopener">out-of-bounds read</a>
+        (CWE-125). Two honest caveats. First, it is <b>not memory-unsafe</b> — the kernel
+        slices its backing buffer in safe Rust, so every read stays inside the allocation;
+        this is <i>information disclosure past a logical boundary</i>, not memory corruption or
+        a smashed stack (<code>src/fs.rs</code> notes this itself). Second, it is a single,
+        <b>deliberately-planted</b> instance that the strict <code>Fs::mount</code> in the same
+        file already rejects — real kernels layer memory-safe languages, continuous fuzzing,
+        and mitigations precisely to keep this class out. <b>One bug, one path</b> — not a
+        model of a hardened kernel's real attack surface.
+      </p>
+      <p class="note">
+        Want the fuller picture? This class is alive and hunted in production software:
+        <a href="https://googleprojectzero.blogspot.com/" target="_blank" rel="noopener">Google Project Zero</a>
+        (real-world exploit writeups) ·
+        <a href="http://langsec.org/" target="_blank" rel="noopener">LangSec</a>
+        (why parsing untrusted input <i>is</i> the security boundary) ·
+        <a href="https://pwn.college/" target="_blank" rel="noopener">pwn.college</a>
+        (hands-on binary exploitation, well past this one primitive).
+      </p>
+    </details>
   </div>
 
   <footer>

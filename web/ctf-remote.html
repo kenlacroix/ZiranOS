@@ -123,6 +123,17 @@
       that runs past your upload reads server bytes you were never given.
       <i>Validating against a length the caller supplies is not validation.</i>
     </p>
+    <p class="note" style="opacity:.72">
+      <b>Scope:</b> this is one bug class — a classic
+      <a href="https://cwe.mitre.org/data/definitions/125.html" target="_blank" rel="noopener">out-of-bounds read</a>
+      (CWE-125), and a <i>logical</i> one: safe-Rust slicing keeps every read inside the
+      buffer, so it's information disclosure past a fence, not memory corruption. One
+      deliberately-planted path — not a hardened kernel's real attack surface. Go deeper:
+      <a href="https://googleprojectzero.blogspot.com/" target="_blank" rel="noopener">Project Zero</a> ·
+      <a href="http://langsec.org/" target="_blank" rel="noopener">LangSec</a> ·
+      <a href="https://pwn.college/" target="_blank" rel="noopener">pwn.college</a> ·
+      <a href="./ctf.html">the Tier-1 scope note</a>.
+    </p>
     <details><summary>How this differs from Tier 1</summary><p class="note">
       The secret isn't in your image — the host plants it past your upload, so no
       local <code>strings</code>/DevTools can reach it. And its offset is
