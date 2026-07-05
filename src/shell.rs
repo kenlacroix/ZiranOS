@@ -376,16 +376,28 @@ fn active_image() -> Vec<u8> {
 // is mounted through the deliberately-vulnerable `Fs::mount_tier2`, so a crafted
 // extent can read the flag the player was never given. With no fw_cfg flag (e.g.
 // the in-browser Tier-1 kernel), none of this engages and `load` stays strict.
+//
+// The flag is not placed flush against the upload: a *per-session gap* (folded
+// from the flag bytes, so stable within a session but unknowable in advance) sits
+// between them, and `load` discloses the resulting offset. This adds no secrecy —
+// the offset is printed — but it makes the exploit instance-specific: a memorized
+// or copy-pasted "offset N, length 64" reads padding, so a solver must target the
+// live session they are on, not a writeup. See docs on the CTF's anti-copy-paste
+// design.
 // ---------------------------------------------------------------------------
 
 /// The per-session Tier-2 flag from `fw_cfg`, if this kernel is a CTF-host instance.
 /// Set once at boot before the shell runs; read-only thereafter.
 static TIER2_FLAG: spin::Mutex<Option<Vec<u8>>> = spin::Mutex::new(None);
 
-/// Fixed size of the flag region appended after a loaded image in server mode. The
-/// flag is NUL-padded/truncated to this width, so a player who knows their own
-/// upload length N knows the secret sits at exactly `[N, N + TIER2_FLAG_LEN)`.
+/// Fixed size of the flag region appended after the per-session gap in server mode.
+/// The flag is NUL-padded/truncated to this width; the region begins at the offset
+/// `load` prints (`upload_len + gap`), not at `upload_len`.
 const TIER2_FLAG_LEN: usize = 64;
+
+/// Upper bound (inclusive) on the per-session gap between the player's upload and
+/// the flag region. Small — it only has to move the target off any fixed offset.
+const TIER2_GAP_MAX: usize = 512;
 
 /// Install the Tier-2 flag (called from `kernel_main` when `fw_cfg opt/flag` exists).
 pub fn set_tier2_flag(flag: Vec<u8>) {
@@ -396,16 +408,36 @@ fn tier2_active() -> bool {
     TIER2_FLAG.lock().is_some()
 }
 
-/// The flag region to append after a loaded image in server mode: the fw_cfg flag,
-/// NUL-padded or truncated to exactly `TIER2_FLAG_LEN` bytes.
-fn tier2_flag_region() -> Option<Vec<u8>> {
-    TIER2_FLAG.lock().as_ref().map(|f| {
-        let n = f.len().min(TIER2_FLAG_LEN);
-        let mut region = Vec::with_capacity(TIER2_FLAG_LEN);
-        region.extend_from_slice(&f[..n]);
-        region.resize(TIER2_FLAG_LEN, 0); // NUL-pad to the fixed width
-        region
-    })
+/// A per-session gap in `0..=TIER2_GAP_MAX`, folded deterministically from the flag
+/// bytes (FNV-1a). Seeded by the per-session secret, so it is stable for the life of
+/// the session yet not guessable without seeing this instance — the point of the
+/// randomization is instance-specificity, not concealment (the offset is disclosed).
+fn tier2_gap(flag: &[u8]) -> usize {
+    let mut h: u32 = 0x811c_9dc5; // FNV-1a offset basis
+    for &b in flag {
+        h = (h ^ b as u32).wrapping_mul(0x0100_0193);
+    }
+    h as usize % (TIER2_GAP_MAX + 1)
+}
+
+/// In server mode, extend the uploaded image with `[per-session gap | flag region]`
+/// and report where the flag region starts (for the `load` banner). In Tier-1 mode
+/// this is a no-op: the image is returned unchanged and there is no flag to locate.
+/// The gap and the NUL-padded flag are part of the *same* backing `Vec` the image is
+/// mounted from — the length-trusting reader's extent ceiling is that buffer's real
+/// length, so a crafted extent into the region reads it (rather than slicing OOB).
+fn tier2_append(bytes: Vec<u8>) -> (Vec<u8>, Option<usize>) {
+    let flag = match TIER2_FLAG.lock().as_ref() {
+        Some(f) => f.clone(),
+        None => return (bytes, None),
+    };
+    let start = bytes.len() + tier2_gap(&flag);
+    let k = flag.len().min(TIER2_FLAG_LEN);
+    let mut b = bytes;
+    b.resize(start, 0); // the per-session gap: NUL padding that shifts the target
+    b.extend_from_slice(&flag[..k]);
+    b.resize(start + TIER2_FLAG_LEN, 0); // NUL-pad the flag to the fixed width
+    (b, Some(start))
 }
 
 /// Mount the active image with the reader that matches the mode: the strict
@@ -557,18 +589,11 @@ fn cmd_load() {
         shln!("load: image too large (max {MAX_IMAGE} bytes)");
         return;
     }
-    // Server mode (Tier-2): append the per-session flag *past* the player's bytes,
-    // so a crafted extent can read a secret they never uploaded (it lives only in
-    // this instance's RAM). With no fw_cfg flag this is a no-op and the image is
-    // exactly what was pasted (Tier-1, strict).
-    let image = match tier2_flag_region() {
-        Some(flag) => {
-            let mut b = bytes;
-            b.extend_from_slice(&flag);
-            b
-        }
-        None => bytes,
-    };
+    // Server mode (Tier-2): append the per-session flag *past* the player's bytes
+    // (behind a per-session gap), so a crafted extent can read a secret they never
+    // uploaded (it lives only in this instance's RAM). With no fw_cfg flag this is a
+    // no-op and the image is exactly what was pasted (Tier-1, strict).
+    let (image, tier2_start) = tier2_append(bytes);
     // Validate through the mode's reader before trusting it — never store an image
     // that would make the FS commands fail to mount.
     if let Err(e) = mount_active(&image) {
@@ -578,6 +603,15 @@ fn cmd_load() {
     let n = image.len();
     *LOADED.lock() = Some(image);
     shln!("load: mounted {n}-byte image (ls / cat / cd now read it)");
+    // Disclose this session's target offset. The value moves per session, so an
+    // exploit crafted against a writeup's fixed offset misses — you must aim at the
+    // offset printed here, on the instance you are actually on.
+    if let Some(start) = tier2_start {
+        shln!(
+            "server: a {TIER2_FLAG_LEN}-byte secret is planted at offset {start} \
+             (0x{start:x}) of this image; reach it with a crafted extent"
+        );
+    }
 }
 
 /// The shell task entry point. Spawned onto the scheduler by `kernel_main`; runs
