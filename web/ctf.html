@@ -38,6 +38,13 @@
     .banner { background:#2a1e1e; border:1px solid #6d3b3b; border-radius:8px;
               padding:.7rem .9rem; font-size:.85rem; }
     .ok { color:#a6e3a1; } .warn { color:#f9e2af; } .dim { opacity:.7; }
+    .capture { display:none; background:#12261a; border:1px solid #2e6b3f; border-radius:8px;
+               padding:.9rem 1rem; margin-top:1rem; }
+    .capture.show { display:block; }
+    .capture h2 { margin:.1rem 0 .4rem; color:#a6e3a1; }
+    .capture .flag { font-family:ui-monospace,monospace; color:#a6e3a1; word-break:break-all; }
+    footer { margin-top:2rem; padding-top:1rem; border-top:1px solid #1e2536;
+             font-size:.82rem; opacity:.75; }
   </style>
 </head>
 <body>
@@ -63,6 +70,23 @@
 
   <div id="terminal"></div>
   <div id="status">loading…</div>
+
+  <div class="capture" id="capture">
+    <h2>🚩 Captured!</h2>
+    <p>You made the filesystem hand you a flag it was built to hide:
+      <span class="flag" id="capture-flag"></span></p>
+    <p class="note">
+      That's the whole primitive — one dishonest length field turned a bounds check
+      into an out-of-bounds read. Remember this is the <b>white-box sandbox</b>: the
+      flag lived in your tab, so it was always in reach. The uncheatable version,
+      where the flag lives only on a server and the exploit must land over the wire,
+      is <b>Tier&nbsp;2</b>.
+    </p>
+    <p class="note">
+      Nice work — <a href="https://github.com/kenlacroix/ZiranOS/issues/new?template=ctf-writeup.md" target="_blank" rel="noopener">submit a writeup</a>
+      to get on the <a href="https://github.com/kenlacroix/ZiranOS/blob/HEAD/SOLVERS.md" target="_blank" rel="noopener">solvers list</a>.
+    </p>
+  </div>
 
   <!-- ------------------------------------------------------------------ -->
   <!-- Challenge controls: build an image, then stream it into `load`.     -->
@@ -153,6 +177,13 @@
     </details>
   </div>
 
+  <footer>
+    <span class="mono">自然 · Ziran OS</span> — a from-scratch x86-64 hobby OS.
+    Built by <a href="https://www.kennethlacroix.me" target="_blank" rel="noopener">Kenneth LaCroix</a> ·
+    <a href="https://github.com/kenlacroix/ZiranOS" target="_blank" rel="noopener">source on GitHub</a> ·
+    <a href="./index.html">guided tour</a>
+  </footer>
+
   <script type="module">
     // Vendored locally (see build-qemu-wasm.sh) so they load under COEP.
     import './vendor/xterm.js';       // window.Terminal
@@ -182,6 +213,26 @@
     Module['pty'] = slave;
     Module['setStatus'] = (t) => { if (t) status(t); };
     Module['onExit'] = () => status('guest halted.');
+
+    // Capture detection: watch what the terminal prints for the exact secret the
+    // current image plants. That string only reaches the screen when `cat` leaks it
+    // (the pasted image is base64, so the plaintext flag is never echoed), and the
+    // boot-log self-test flags are different strings — so this can't false-trigger.
+    let captureTarget = null, captureBuf = '', captured = false;
+    const dec = new TextDecoder();
+    const origWrite = term.write.bind(term);
+    term.write = (data, cb) => {
+      const s = typeof data === 'string' ? data : dec.decode(data, { stream: true });
+      captureBuf = (captureBuf + s).slice(-4096);
+      if (captureTarget && !captured && captureBuf.includes(captureTarget)) {
+        captured = true;
+        document.getElementById('capture-flag').textContent = captureTarget;
+        const el = document.getElementById('capture');
+        el.classList.add('show');
+        el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+      return origWrite(data, cb);
+    };
 
     function loadScript(src) {
       return new Promise((res, rej) => {
@@ -253,8 +304,12 @@
     const secretEl = () => document.getElementById('secret').value || 'FLAG{practice}';
 
     function setPreset(opts, desc) {
-      document.getElementById('image').value = toB64(buildImage({ ...opts, secret: secretEl() }));
+      const secret = secretEl();
+      document.getElementById('image').value = toB64(buildImage({ ...opts, secret }));
       document.getElementById('preset-desc').innerHTML = desc;
+      captureTarget = secret;   // arm capture detection for the flag this image plants
+      captured = false;         // re-arm so a fresh load can fire again
+      document.getElementById('capture').classList.remove('show');
     }
     document.getElementById('p-honest').onclick = () => setPreset(
       { forgeDataEnd: false, stretch: false },
