@@ -3,7 +3,26 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Ziran OS — live in the browser (qemu-wasm)</title>
+  <title>Ziran OS — the real 64-bit kernel, live in your browser</title>
+  <meta name="description" content="Boot the real Ziran OS 64-bit kernel live in your browser via QEMU compiled to WebAssembly — an interactive shell with help, ps, mem, ls, cd and cat. Not a replay; a one-time ~17 MB download.">
+  <link rel="canonical" href="https://ziranos.pages.dev/qemu-wasm">
+  <meta name="robots" content="index, follow">
+  <meta name="author" content="Kenneth LaCroix">
+  <meta name="theme-color" content="#0b0e14">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Ziran OS">
+  <meta property="og:url" content="https://ziranos.pages.dev/qemu-wasm">
+  <meta property="og:title" content="Ziran OS — the real 64-bit kernel, live in your browser">
+  <meta property="og:description" content="Real QEMU compiled to WebAssembly booting the actual 64-bit Ziran OS kernel to an interactive shell, right in your browser tab.">
+  <meta property="og:image" content="https://ziranos.pages.dev/og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Ziran OS — the real 64-bit kernel, live in your browser">
+  <meta name="twitter:description" content="Real QEMU-in-WebAssembly booting the actual 64-bit kernel to an interactive shell.">
+  <meta name="twitter:image" content="https://ziranos.pages.dev/og.png">
   <!-- xterm.css vendored locally: COEP: require-corp blocks cross-origin CDN loads. -->
   <link rel="stylesheet" href="./vendor/xterm.css">
   <style>
@@ -25,8 +44,8 @@
     <a href="./index.html">&larr; guided tour</a> ·
     <a href="./ctf.html">🚩 try the filesystem CTF</a>
   </p>
-  <div id="terminal"></div>
-  <div id="status">loading…</div>
+  <div id="terminal" role="application" aria-label="Ziran OS live kernel terminal — click, then type commands"></div>
+  <div id="status" role="status" aria-live="polite">loading…</div>
   <p class="note" style="margin-top:1rem;opacity:.7">
     Built by <a href="https://www.kennethlacroix.me">Kenneth LaCroix</a> ·
     <a href="https://github.com/kenlacroix/ZiranOS">source on GitHub</a>

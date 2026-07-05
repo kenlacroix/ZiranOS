@@ -3,7 +3,26 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Ziran OS — a real session (recording)</title>
+  <title>Ziran OS — a real recorded session, byte for byte over serial</title>
+  <meta name="description" content="Watch a byte-for-byte recording of the real Ziran OS kernel booting over serial — the boot log, scheduler tasks under ps, live memory under mem, and navigating the on-disk directory tree with cd, ls and cat. Not a reconstruction.">
+  <link rel="canonical" href="https://ziranos.pages.dev/replay">
+  <meta name="robots" content="index, follow">
+  <meta name="author" content="Kenneth LaCroix">
+  <meta name="theme-color" content="#0b0e14">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Ziran OS">
+  <meta property="og:url" content="https://ziranos.pages.dev/replay">
+  <meta property="og:title" content="Ziran OS — a real recorded session, byte for byte over serial">
+  <meta property="og:description" content="A real recording of the actual kernel captured over serial: boot, ps, mem, and walking the on-disk directory tree. Not a reconstruction.">
+  <meta property="og:image" content="https://ziranos.pages.dev/og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Ziran OS — a real recorded session">
+  <meta name="twitter:description" content="A byte-for-byte recording of the real kernel captured over serial.">
+  <meta name="twitter:image" content="https://ziranos.pages.dev/og.png">
   <style>
     :root { --bg:#0b0e14; --fg:#e6e9ef; --dim:#8b93a7; --accent:#89b4fa; --green:#a6e3a1; --line:#232838; }
     * { box-sizing:border-box; }
@@ -29,6 +48,7 @@
     .cursor { display:inline-block; width:8px; height:1em; background:#cfe3c8; vertical-align:text-bottom;
               animation:blink 1s steps(1) infinite; }
     @keyframes blink { 50% { opacity:0; } }
+    @media (prefers-reduced-motion: reduce) { .cursor { animation: none; } }
     .controls { display:flex; gap:.5rem; align-items:center; margin-top:.7rem; }
     button { font:inherit; font-size:.85rem; color:var(--fg); background:#141a2a; border:1px solid var(--line);
              border-radius:8px; padding:.4rem .8rem; cursor:pointer; }
@@ -45,6 +65,8 @@
       the boot log, the scheduler's tasks under <code>ps</code>, the live memory/uptime under
       <code>mem</code>, and navigating the on-disk directory tree with <code>cd</code>/<code>ls</code>/<code>cat</code>
       are all output the OS produced. <a href="./index.html">&larr; back to the guided tour</a>
+      · <a href="./qemu-wasm.html">boot the real kernel live</a>
+      · <a href="./ctf.html">🚩 the filesystem CTF</a>
     </p>
 
     <div class="term-frame">
