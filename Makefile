@@ -23,17 +23,25 @@ ARCH        := x86_64
 PROFILE     := release
 TARGET      := x86_64-unknown-none
 
-# Toolchain hooks. Defaults suit Linux/CI; a command-line override always wins
-# over these `:=` assignments. On macOS the default `ld` is Apple's linker
-# (cannot link this image: "ld: unknown option: -n"), there is no `readelf` or
-# `timeout`, and GRUB ships under an `x86_64-elf-` prefix. Build on a Mac with:
-#   make LD=x86_64-elf-ld READELF=x86_64-elf-readelf \
-#        GRUB_MKRESCUE=x86_64-elf-grub-mkrescue TIMEOUT=gtimeout
+# Toolchain hooks, auto-detected by OS; a command-line override always wins. On
+# macOS the default `ld` is Apple's linker (cannot link this image: "ld: unknown
+# option: -n"), there is no `readelf`/`timeout`, and GRUB ships under an
+# `x86_64-elf-` prefix — so on Darwin we default to the cross-binutils
+# (`brew install x86_64-elf-binutils`; `gtimeout` from coreutils). Linux/CI keep
+# the plain names. Override any of these on the command line if your setup differs.
+ifeq ($(shell uname -s),Darwin)
+LD            := x86_64-elf-ld
+READELF       := x86_64-elf-readelf
+GRUB_MKRESCUE := x86_64-elf-grub-mkrescue
+TIMEOUT       := gtimeout
+OBJCOPY       := x86_64-elf-objcopy
+else
 LD            := ld
 READELF       := readelf
 GRUB_MKRESCUE := grub-mkrescue
 TIMEOUT       := timeout
-OBJCOPY       := objcopy   # macOS: OBJCOPY=x86_64-elf-objcopy (from x86_64-elf-binutils)
+OBJCOPY       := objcopy
+endif
 
 KERNEL      := build/kernel.bin
 ISO         := build/ziran.iso
@@ -84,7 +92,7 @@ ifeq ($(PROFILE),debug)
     CARGO_FLAGS :=
 endif
 
-.PHONY: all iso run console run-headless debug gdb clean check-header web serve web-test deploy-web
+.PHONY: all iso run console run-headless debug gdb clean check-header web serve web-test deploy-web stage-web-kernel redeploy-web
 
 all: $(KERNEL)
 
@@ -198,7 +206,22 @@ web-test:
 CF_PAGES_PROJECT ?= ziranos
 deploy-web:
 	@test -f web/qemu-system-x86_64.wasm || { echo "missing web/qemu-system-x86_64.wasm -- run ./web/build-qemu-wasm.sh first"; exit 1; }
+	@test -f web/kernel-v86.bin || { echo "missing web/kernel-v86.bin -- run 'make stage-web-kernel' first"; exit 1; }
 	npx wrangler pages deploy web --project-name=$(CF_PAGES_PROJECT)
+
+# Rebuild ONLY the flat browser kernel (web/kernel-v86.bin) from current source.
+# `kernel-v86.bin` is what the live qemu-wasm boot loads via `-kernel`; it is a
+# gitignored artifact, so pulling source does NOT refresh it and a stale one boots
+# old code (e.g. an M12 kernel with no `load` command). This depends only on the
+# ELF + objcopy -- NOT the ISO -- so it needs no GRUB. Run it whenever the kernel
+# changed, before deploying.
+stage-web-kernel: $(KERNEL)
+	$(OBJCOPY) -O binary $(KERNEL) web/kernel-v86.bin
+	@echo "staged fresh web/kernel-v86.bin ($$(wc -c < web/kernel-v86.bin) bytes)"
+
+# One command to ship a current demo: rebuild the browser kernel, then upload.
+# This is the safe default -- it can't silently deploy a stale kernel.
+redeploy-web: stage-web-kernel deploy-web
 
 clean:
 	cargo clean
