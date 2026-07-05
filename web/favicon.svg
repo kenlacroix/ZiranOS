@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Ziran OS">
+  <rect width="64" height="64" rx="12" fill="#050f0b"/>
+  <rect x="6" y="6" width="52" height="52" rx="8" fill="none" stroke="#0c1b14" stroke-width="2"/>
+  <text x="32" y="42" font-family="ui-sans-serif,system-ui,sans-serif" font-size="34" font-weight="700"
+        text-anchor="middle" fill="#57e08a">自</text>
+</svg>

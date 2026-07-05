@@ -59,6 +59,13 @@ tool grows with the OS.
 
 ## Deploying
 
-It's a static page. GitHub Pages, any static host, or an `<iframe>` embed in a
-blog post all work. For an embed, self-host the v86 files (above) so it doesn't
-depend on a CDN staying up.
+The site is live at <https://ziranos.pages.dev/> on **Cloudflare Pages**, deployed
+with `make deploy-web` (or `make redeploy-web` to rebuild the browser kernel first).
+Cloudflare — not GitHub Pages — because the live qemu-wasm boot needs the COOP/COEP
+cross-origin-isolation headers set in `web/_headers`, which GitHub Pages can't send.
+The whole `web/` folder is direct-uploaded (including the gitignored ~17 MB qemu-wasm
+assets a git-connected deploy can't see). Full runbook: `docs/DEPLOY.md`.
+
+The reconstruction-only tour (no live boot) is self-contained and would run on any
+static host or as an `<iframe>` embed; only the live-boot page needs the isolation
+headers. See `docs/DEPLOY.md` for the two-phase split.

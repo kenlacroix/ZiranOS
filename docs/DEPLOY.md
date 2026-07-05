@@ -5,8 +5,10 @@ The browser teaching tool in `web/` is the project's public face. Host it on
 the **COOP/COEP** cross-origin-isolation headers the live qemu-wasm boot needs
 (via `web/_headers`), which GitHub Pages cannot.
 
-There are two phases, and **phase 1 is fully unblocked right now** (it doesn't
-need the 46 MB build):
+Both phases below are now **live** at <https://ziranos.pages.dev/> — the whole
+`web/` folder (tour + the ~17 MB qemu-wasm assets, every file under Pages' 25 MiB
+cap) is direct-uploaded via `make deploy-web`. The two-phase split is kept as
+reference for a fresh setup; phase 1 doesn't need the ~17 MB build:
 
 ## Phase 1 — the tour, live (do this now)
 
@@ -35,8 +37,9 @@ static deploy of `web/` just works.
    `web/_headers` applies these site-wide (safe — the tour loads no cross-origin
    resources).
 
-That's the project piece publicly live. The "Boot the real kernel" button stays
-hidden (`QEMU_WASM_READY = false`) until phase 2.
+That's the project piece publicly live. The "Boot the real kernel" button is a
+plain `<a href="qemu-wasm.html">` — it works as soon as phase 2's assets are
+uploaded alongside the tour.
 
 ## Phase 2 — the live boot assets (after `build-qemu-wasm.sh`)
 
@@ -73,7 +76,8 @@ visit with `?assets=https://host/path/`. Steps:
    (same-origin path) — or leave it `./` and link the button with
    `qemu-wasm.html?assets=/qemu/`. Keep `vendor/`, `qemu-wasm.html`, `index.html`,
    `replay.html`, `ziran-session.cast` in the Pages deploy.
-5. Flip **`QEMU_WASM_READY = true`** in `index.html` so the tour's button appears.
+5. The tour's "Boot the real kernel" button is already a plain link to
+   `qemu-wasm.html` — no flag to flip; it just needs the assets uploaded.
 6. Load it, confirm `crossOriginIsolated === true` in the console, and boot to
    `ziran:/>`.
 

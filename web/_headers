@@ -1,22 +1,50 @@
-# Cloudflare Pages / Netlify headers for the Ziran OS web tool.
-#
-# The two cross-origin-isolation headers are what let the live qemu-wasm boot run
-# (SharedArrayBuffer needs an isolated context). GitHub Pages can't set these —
-# that's why this project hosts on Cloudflare Pages. Safe to apply site-wide: the
-# tour loads no cross-origin resources (v86 and xterm are self-hosted), so nothing
-# breaks under COEP: require-corp.
+# Cloudflare Pages headers for the Ziran OS web tool.
+
+# Site-wide safe defaults.
 /*
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+
+# Cross-origin isolation (COOP + COEP) enables the SharedArrayBuffer the qemu-wasm /
+# v86 boot needs. Applied ONLY to the pages that run an emulator — NOT to
+# /ctf-remote (no wasm; must load the cross-origin Cloudflare Turnstile widget, which
+# COEP would block) and NOT to /replay. Same-origin assets (out.js/.wasm/.data/…)
+# load fine under COEP without CORP, so no per-asset CORP is needed.
+/
   Cross-Origin-Opener-Policy: same-origin
   Cross-Origin-Embedder-Policy: require-corp
-  Cross-Origin-Resource-Policy: same-origin
+/index.html
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: require-corp
+/ctf
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: require-corp
+/ctf.html
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: require-corp
+/qemu-wasm
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: require-corp
+/qemu-wasm.html
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: require-corp
 
-# The big emulator payloads change only on a rebuild — cache them hard. If you
-# rebuild and need clients to refetch, purge the Cloudflare cache (or hard-reload).
-/out.wasm
+# Big emulator payloads change only on a rebuild — cache hard.
+/qemu-system-x86_64.wasm
   Cache-Control: public, max-age=604800
-/out.data
+/qemu-system-x86_64.data
   Cache-Control: public, max-age=604800
-/out.worker.js
+/qemu-system-x86_64.worker.js
+  Cache-Control: public, max-age=604800
+/out.js
+  Cache-Control: public, max-age=604800
+/load.js
   Cache-Control: public, max-age=604800
 /v86.wasm
   Cache-Control: public, max-age=604800
+/favicon.svg
+  Cache-Control: public, max-age=86400
+/apple-touch-icon.png
+  Cache-Control: public, max-age=86400
+/og.png
+  Cache-Control: public, max-age=86400

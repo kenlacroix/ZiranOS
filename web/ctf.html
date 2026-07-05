@@ -3,7 +3,26 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Ziran OS — Filesystem CTF (Tier 1)</title>
+  <title>Ziran OS — Filesystem CTF: leak a flag from a real kernel in your browser</title>
+  <meta name="description" content="A hands-on filesystem capture-the-flag: a real from-scratch 64-bit kernel (QEMU compiled to WebAssembly) hides a FLAG in bytes with no directory entry. Craft a disk image whose own rules betray it, and make the filesystem hand you the flag.">
+  <link rel="canonical" href="https://ziranos.pages.dev/ctf">
+  <meta name="robots" content="index, follow">
+  <meta name="author" content="Kenneth LaCroix">
+  <meta name="theme-color" content="#0b0e14">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Ziran OS">
+  <meta property="og:url" content="https://ziranos.pages.dev/ctf">
+  <meta property="og:title" content="Ziran OS — Filesystem CTF: leak a flag from a real kernel in your browser">
+  <meta property="og:description" content="A real 64-bit kernel hides a FLAG in bytes with no directory entry. Craft a disk image that makes its filesystem betray the secret — the milestone-16 exploit, live in your tab.">
+  <meta property="og:image" content="https://ziranos.pages.dev/og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Ziran OS — Filesystem CTF">
+  <meta name="twitter:description" content="Leak a hidden flag from a real from-scratch kernel booting live in your browser.">
+  <meta name="twitter:image" content="https://ziranos.pages.dev/og.png">
   <!-- xterm.css vendored locally: COEP: require-corp blocks cross-origin CDN loads. -->
   <link rel="stylesheet" href="./vendor/xterm.css">
   <style>
@@ -68,8 +87,8 @@
     real — is <b><a href="./ctf-remote.html">Tier 2, the remote capture</a></b>.
   </div>
 
-  <div id="terminal"></div>
-  <div id="status">loading…</div>
+  <div id="terminal" role="application" aria-label="Ziran OS live kernel terminal — click, then type commands"></div>
+  <div id="status" role="status" aria-live="polite">loading…</div>
 
   <div class="capture" id="capture">
     <h2>🚩 Captured!</h2>
@@ -173,6 +192,10 @@
         (never in this page, never in git), and the only way to get it is to land this
         same exploit over the wire — develop it here, capture it there. That's the
         version worth bragging about.
+        <br><br>
+        <span class="warn">Tier 2 is built and being hardened for public launch — it is
+        not live yet.</span> Develop your exploit here in the meantime; when the remote
+        capture opens, this same crafted image is what you'll fire over the wire.
       </p>
     </details>
   </div>
@@ -258,8 +281,6 @@
     })().catch((e) => { status('boot error: ' + e); term.write('\r\n[boot error] ' + e + '\r\n'); });
 
     // -- ZranFS v3 image builder (mirrors src/fs.rs boot_image / format) ------
-    // NOTE (pre-launch): verify one round-trip against the live kernel — load the
-    // "honest" preset and confirm `ls /` shows both files — before publishing.
     const enc = new TextEncoder();
     const le16 = (v) => [v & 255, (v >> 8) & 255];
     const le32 = (v) => [v & 255, (v >> 8) & 255, (v >> 16) & 255, (v >> 24) & 255];
