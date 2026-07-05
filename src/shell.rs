@@ -269,7 +269,7 @@ fn cmd_cd(cwd: &mut String, arg: &str) {
     }
     let target = canonicalize(cwd, arg);
     let image = active_image();
-    let fs = match crate::fs::Fs::mount(&image) {
+    let fs = match mount_active(&image) {
         Ok(fs) => fs,
         Err(e) => {
             shln!("cd: cannot mount filesystem: {e:?}");
@@ -289,7 +289,7 @@ fn cmd_cd(cwd: &mut String, arg: &str) {
 fn cmd_ls(cwd: &str, arg: &str) {
     let target = if arg.is_empty() { cwd.into() } else { canonicalize(cwd, arg) };
     let image = active_image();
-    let fs = match crate::fs::Fs::mount(&image) {
+    let fs = match mount_active(&image) {
         Ok(fs) => fs,
         Err(e) => {
             shln!("ls: cannot mount filesystem: {e:?}");
@@ -320,7 +320,7 @@ fn cmd_cat(cwd: &str, arg: &str) {
     }
     let target = canonicalize(cwd, arg);
     let image = active_image();
-    let fs = match crate::fs::Fs::mount(&image) {
+    let fs = match mount_active(&image) {
         Ok(fs) => fs,
         Err(e) => {
             shln!("cat: cannot mount filesystem: {e:?}");
@@ -366,6 +366,56 @@ fn active_image() -> Vec<u8> {
     match &*LOADED.lock() {
         Some(img) => img.clone(),
         None => crate::fs::boot_image(),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tier-2 CTF mode (remote capture). When the kernel is booted by the CTF host
+// with a per-session secret in `fw_cfg opt/flag`, the kernel is in "server mode":
+// on `load`, the flag is appended past the player's uploaded bytes and the image
+// is mounted through the deliberately-vulnerable `Fs::mount_tier2`, so a crafted
+// extent can read the flag the player was never given. With no fw_cfg flag (e.g.
+// the in-browser Tier-1 kernel), none of this engages and `load` stays strict.
+// ---------------------------------------------------------------------------
+
+/// The per-session Tier-2 flag from `fw_cfg`, if this kernel is a CTF-host instance.
+/// Set once at boot before the shell runs; read-only thereafter.
+static TIER2_FLAG: spin::Mutex<Option<Vec<u8>>> = spin::Mutex::new(None);
+
+/// Fixed size of the flag region appended after a loaded image in server mode. The
+/// flag is NUL-padded/truncated to this width, so a player who knows their own
+/// upload length N knows the secret sits at exactly `[N, N + TIER2_FLAG_LEN)`.
+const TIER2_FLAG_LEN: usize = 64;
+
+/// Install the Tier-2 flag (called from `kernel_main` when `fw_cfg opt/flag` exists).
+pub fn set_tier2_flag(flag: Vec<u8>) {
+    *TIER2_FLAG.lock() = Some(flag);
+}
+
+fn tier2_active() -> bool {
+    TIER2_FLAG.lock().is_some()
+}
+
+/// The flag region to append after a loaded image in server mode: the fw_cfg flag,
+/// NUL-padded or truncated to exactly `TIER2_FLAG_LEN` bytes.
+fn tier2_flag_region() -> Option<Vec<u8>> {
+    TIER2_FLAG.lock().as_ref().map(|f| {
+        let n = f.len().min(TIER2_FLAG_LEN);
+        let mut region = Vec::with_capacity(TIER2_FLAG_LEN);
+        region.extend_from_slice(&f[..n]);
+        region.resize(TIER2_FLAG_LEN, 0); // NUL-pad to the fixed width
+        region
+    })
+}
+
+/// Mount the active image with the reader that matches the mode: the strict
+/// `Fs::mount` normally (Tier-1 / browser), or the length-trusting `Fs::mount_tier2`
+/// on a CTF host (so a crafted extent can reach the appended flag).
+fn mount_active(image: &[u8]) -> Result<crate::fs::Fs<'_>, crate::fs::FsError> {
+    if tier2_active() {
+        crate::fs::Fs::mount_tier2(image)
+    } else {
+        crate::fs::Fs::mount(image)
     }
 }
 
@@ -507,14 +557,26 @@ fn cmd_load() {
         shln!("load: image too large (max {MAX_IMAGE} bytes)");
         return;
     }
-    // Validate through the *real* reader before trusting it — never store an image
+    // Server mode (Tier-2): append the per-session flag *past* the player's bytes,
+    // so a crafted extent can read a secret they never uploaded (it lives only in
+    // this instance's RAM). With no fw_cfg flag this is a no-op and the image is
+    // exactly what was pasted (Tier-1, strict).
+    let image = match tier2_flag_region() {
+        Some(flag) => {
+            let mut b = bytes;
+            b.extend_from_slice(&flag);
+            b
+        }
+        None => bytes,
+    };
+    // Validate through the mode's reader before trusting it — never store an image
     // that would make the FS commands fail to mount.
-    if let Err(e) = crate::fs::Fs::mount(&bytes) {
+    if let Err(e) = mount_active(&image) {
         shln!("load: not a valid image: {e:?}");
         return;
     }
-    let n = bytes.len();
-    *LOADED.lock() = Some(bytes);
+    let n = image.len();
+    *LOADED.lock() = Some(image);
     shln!("load: mounted {n}-byte image (ls / cat / cd now read it)");
 }
 
