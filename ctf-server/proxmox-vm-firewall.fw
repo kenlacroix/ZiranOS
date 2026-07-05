@@ -23,11 +23,11 @@ policy_out: ACCEPT
 ipfilter: 1
 
 [IPSET ipfilter-net1]  # the VM's own NIC (net1 = the LAN NIC); set to the VM's IP
-192.168.1.66
+192.0.2.66             # <- EXAMPLE (RFC5737): replace with your VM's real LAN IP
 
 [RULES]
 # --- INBOUND: admin/Claude SSH from your workstation ONLY (edit the source IP) ---
-IN ACCEPT -source 192.168.1.50 -p tcp -dport 22 -log nolog
+IN ACCEPT -source 192.0.2.10 -p tcp -dport 22 -log nolog   # <- EXAMPLE: your admin workstation IP
 # everything else inbound falls through to policy_in: DROP
 # (cloudflared needs NO inbound rule — it dials OUT to Cloudflare.)
 
