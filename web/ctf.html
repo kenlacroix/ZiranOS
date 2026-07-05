@@ -140,6 +140,35 @@
     </div>
   </div>
 
+  <details class="panel" id="craft-panel">
+    <summary style="cursor:pointer"><b>✎ Craft mode</b> — set every field yourself <span class="dim">(the on-ramp for Tier 2)</span></summary>
+    <p class="note">
+      The presets build fixed exploits against <em>this</em> disk. Craft mode is a plain
+      ZranFS serializer: set the superblock and directory fields to whatever you like and
+      it emits the base64 — it does <b>not</b> solve anything for you. This is what
+      <a href="./ctf-remote.html">Tier&nbsp;2</a> needs: there the flag sits at a
+      <b>per-session offset the kernel prints</b>, past your upload, so no fixed preset can
+      reach it — you build a fresh image aimed at your instance's offset. Blank fields stay
+      honest. Byte layout: the
+      <a href="https://github.com/kenlacroix/ZiranOS/blob/HEAD/docs/concepts/zranfs-format.md">ZranFS format primer</a>.
+    </p>
+    <div class="row">
+      <label>superblock <code>total_size</code>: <input id="craft-total" type="number" min="0" placeholder="honest"></label>
+      <label>superblock <code>data_end</code>: <input id="craft-dataend" type="number" min="0" placeholder="honest"></label>
+    </div>
+    <div class="row">
+      <label><code>notes.txt</code> <code>offset</code>: <input id="craft-off" type="number" min="0" placeholder="honest"></label>
+      <label><code>notes.txt</code> declared <code>length</code>: <input id="craft-len" type="number" min="0" placeholder="honest"></label>
+    </div>
+    <div class="row">
+      <label><input id="craft-local" type="checkbox" checked> plant a local flag to rehearse here <span class="dim">(uncheck when building for Tier&nbsp;2)</span></label>
+    </div>
+    <div class="row">
+      <button class="primary" id="craft-build">Build crafted image ▸</button>
+      <span class="note" id="craft-info"></span>
+    </div>
+  </details>
+
   <div class="panel">
     <h2 style="margin-top:.2rem">2 · Walkthrough <span class="dim">(spoilers — try it first)</span></h2>
 
@@ -347,6 +376,60 @@
       '③ <b>The leak.</b> <code>data_end</code> is forged to <code>total_size</code> and ' +
       "<code>notes.txt</code>'s extent is stretched over the flag. It mounts — then " +
       '<code>cat /notes.txt</code> prints the file <i>and</i> the flag after it.');
+
+    // -- Craft mode: a general ZranFS serializer -----------------------------
+    // Every superblock/dirent field is settable; blanks stay honest. It builds
+    // exactly what you specify and never chooses the exploit for you — the whole
+    // point of Tier 2 is that YOU decide what reaches the per-session offset.
+    function buildCraft({ total0, dataEnd, off0, len0, appendSecret, secret }) {
+      const fb = FILES.map((f) => enc.encode(f.content));
+      const sb = enc.encode(secret);
+      const dataStart = SB + FILES.length * DIRENT;
+      let off = dataStart;
+      const ext = fb.map((b) => { const e = { off, len: b.length }; off += b.length; return e; });
+      const honestDataEnd = off;          // end of the legit file bytes
+      const secretOff = off;              // a local flag would sit right after
+      const imgLen = appendSecret ? off + sb.length : off;   // the real bytes we emit
+      const buf = new Uint8Array(imgLen);
+      buf.set(enc.encode('ZRFS'), 0);
+      buf.set(le16(3), 4);
+      buf.set(le16(FILES.length), 6);
+      buf.set(le32(((total0 != null ? total0 : imgLen) >>> 0)), 8);       // total_size (over-declare it for Tier 2)
+      buf.set(le32(((dataEnd != null ? dataEnd : honestDataEnd) >>> 0)), 12); // data_end (forge it)
+      FILES.forEach((f, i) => {
+        const base = SB + i * DIRENT;
+        buf.set(enc.encode(f.name).slice(0, 20), base);
+        const eoff = (i === 0 && off0 != null) ? off0 : ext[i].off;
+        const elen = (i === 0 && len0 != null) ? len0 : ext[i].len;      // stretch it to reach past your data
+        buf.set(le32(eoff >>> 0), base + 20);
+        buf.set(le32(elen >>> 0), base + 24);
+        buf.set(le32(KIND_FILE), base + 28);
+      });
+      fb.forEach((b, i) => buf.set(b, ext[i].off));
+      if (appendSecret) buf.set(sb, secretOff);
+      return { buf, dataStart, honestDataEnd, secretOff, imgLen };
+    }
+
+    const numOrNull = (id) => { const v = parseInt(document.getElementById(id).value, 10); return Number.isNaN(v) ? null : v; };
+    document.getElementById('craft-build').onclick = () => {
+      const appendSecret = document.getElementById('craft-local').checked;
+      const secret = secretEl();
+      const r = buildCraft({
+        total0: numOrNull('craft-total'), dataEnd: numOrNull('craft-dataend'),
+        off0: numOrNull('craft-off'), len0: numOrNull('craft-len'),
+        appendSecret, secret,
+      });
+      document.getElementById('image').value = toB64(r.buf);
+      if (appendSecret) captureTarget = secret;   // arm local capture detection
+      captured = false;
+      document.getElementById('capture').classList.remove('show');
+      document.getElementById('craft-info').innerHTML =
+        `built a ${r.imgLen}-byte image · file table ends / data begins at offset <b>${r.dataStart}</b> · ` +
+        `an honest <code>data_end</code> here is <b>${r.honestDataEnd}</b>` +
+        (appendSecret
+          ? ` · local flag planted at offset <b>${r.secretOff}</b>`
+          : ` · <b>no local flag</b> — on Tier 2 the server appends its flag past your ${r.imgLen} bytes; aim at the offset <code>load</code> prints`);
+    };
 
     // -- stream the image into the running `load` command --------------------
     // Feed keystrokes to the guest through xterm. This build of xterm exposes
