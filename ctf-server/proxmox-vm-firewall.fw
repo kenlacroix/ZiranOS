@@ -1,0 +1,40 @@
+# Proxmox VM firewall for the SIMPLER topology: VM on the LAN (vmbr0), egress to the
+# LAN blocked at the HOST. Copy to /etc/pve/firewall/<VMID>.fw on the Proxmox host
+# (or set the equivalent in the GUI: VM -> Firewall). Also enable the firewall at
+# Datacenter -> Firewall and Node -> Firewall.
+#
+# WHY host-level (not in-VM): the attacker's goal is ring-0 in the guest, and we
+# assume a possible QEMU escape to VM-root. A rooted VM can flush its OWN nftables —
+# so the block that matters MUST live outside the VM. This file is enforced at the
+# bridge by the Proxmox host; the VM cannot touch it. THIS is the real boundary.
+#
+# Trade-off vs the NAT'd island (proxmox-host-nat.conf): simpler (direct SSH admin),
+# but the VM shares your LAN's L2 segment. `ipfilter` below pins it to its MAC/IP to
+# blunt ARP/IP spoofing. For a hobby CTF this is a sound choice.
+#
+# EDIT: the admin source IP, the gateway IP, and your LAN range.
+
+[OPTIONS]
+enable: 1
+policy_in: DROP
+policy_out: ACCEPT
+# Anti-spoof: the VM may only use its assigned MAC/IP (blunts L2/ARP tricks).
+# Requires an [IPSET] with the VM's IP (below) referenced as an ipfilter-net.
+ipfilter: 1
+
+[IPSET ipfilter-net1]  # the VM's own NIC (net1 = the LAN NIC); set to the VM's IP
+192.168.1.66
+
+[RULES]
+# --- INBOUND: admin/Claude SSH from your workstation ONLY (edit the source IP) ---
+IN ACCEPT -source 192.168.1.50 -p tcp -dport 22 -log nolog
+# everything else inbound falls through to policy_in: DROP
+# (cloudflared needs NO inbound rule — it dials OUT to Cloudflare.)
+
+# --- OUTBOUND: the island — allow the gateway (WAN/DNS) + public internet,
+#     but DROP everything headed for the LAN. Rules are first-match, top-down. ---
+OUT ACCEPT -dest 192.168.1.1 -log nolog          # default gateway -> WAN + DNS via router
+OUT DROP   -dest 192.168.0.0/16 -log nolog        # block the LAN
+OUT DROP   -dest 10.0.0.0/8 -log nolog
+OUT DROP   -dest 172.16.0.0/12 -log nolog
+# public-internet destinations fall through to policy_out: ACCEPT (needed for the tunnel)
