@@ -47,6 +47,15 @@ systemctl enable --now nftables
 nft -f /etc/nftables.conf
 echo "  loaded /etc/nftables.conf — EDIT the LAN ranges in it to match your homelab."
 
+log "host hygiene: cap journald so guest/bridge logs can't fill the disk"
+mkdir -p /etc/systemd/journald.conf.d
+cat > /etc/systemd/journald.conf.d/ctf.conf <<'EOF'
+[Journal]
+SystemMaxUse=500M
+MaxRetentionSec=1week
+EOF
+systemctl restart systemd-journald || true
+
 log "systemd service (sandboxed)"
 install -m 0644 "$HERE/ctf-bridge.service" /etc/systemd/system/ctf-bridge.service
 systemctl daemon-reload
