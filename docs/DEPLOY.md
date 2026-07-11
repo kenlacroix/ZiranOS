@@ -81,34 +81,44 @@ visit with `?assets=https://host/path/`. Steps:
 6. Load it, confirm `crossOriginIsolated === true` in the console, and boot to
    `ziran:/>`.
 
-**Chosen path (the build landed under 25 MiB — no R2 needed).** The built
-`qemu-system-x86_64.wasm` is ~15.5 MiB and the live-boot page loads the kernel via
-`-kernel /kernel-v86.bin` (not the 16 MiB ISO), so every asset is under Pages'
-25 MiB per-file cap. Skip R2 and **direct-upload the whole `web/` folder** — which
-includes the gitignored assets a git-connected deploy can't see (that is exactly
-why `/qemu-wasm` renders text but never boots the kernel):
+**Chosen path (the build landed under 25 MiB — no R2 needed, assets committed).**
+The built `qemu-system-x86_64.wasm` is ~15.5 MiB and the live-boot page loads the
+kernel via `-kernel /kernel-v86.bin` (not the 16 MiB ISO), so every asset is under
+Pages' 25 MiB per-file cap. And since 2026-07 the Pages project is **git-connected**
+(pushes to the production branch auto-deploy), so the runtime assets are **committed
+to the repo** — a git build only contains tracked files, and gitignoring them is how
+production shipped HTML with every emulator/terminal asset 404ing (broke `/qemu-wasm`,
+`/ctf`, and `/ctf-remote` on 2026-07-05; on `/ctf-remote` the failed
+`import './vendor/xterm.js'` killed the script before the Turnstile callback was
+defined, so the human check passed and then nothing happened).
+
+Tracked runtime assets: `vendor/` (xterm), `libv86.js`, `v86.wasm`, `seabios.bin`,
+`vgabios.bin`, `kernel-v86.bin`, `out.js`, `load.js`, `qemu-system-x86_64.*`.
+Rebuilds are out-of-band and rare (`./web/build-qemu-wasm.sh` for the qemu-wasm
+set) — commit the new binaries when they change.
+
+**`web/kernel-v86.bin` is a committed build artifact — re-stage it whenever the
+kernel changes:**
 
 ```sh
-./web/build-qemu-wasm.sh        # once, to produce the qemu-wasm assets (heavy; see that script)
-make redeploy-web               # rebuild the browser kernel from source, then upload
+make stage-web-kernel           # ELF → objcopy → web/kernel-v86.bin (no GRUB/ISO needed)
+git add web/kernel-v86.bin && git commit
 ```
 
-**Use `make redeploy-web`, not `make deploy-web`, when the kernel changed.**
-`web/kernel-v86.bin` (the binary the live boot runs via `-kernel`) is a **gitignored
-build artifact** — pulling source does *not* refresh it, and `deploy-web` only
-uploads what's on disk. So a plain `deploy-web` silently ships a **stale kernel**
-(e.g. an M12 build with no `load` command, even though the source has it).
-`redeploy-web` first runs `stage-web-kernel` (ELF → `objcopy` → `kernel-v86.bin`;
-no GRUB/ISO needed), then deploys — so it can't ship an old kernel. `deploy-web`
-now also refuses to run if `kernel-v86.bin` is missing entirely.
+Otherwise the live site boots a **stale kernel** (e.g. an M12 build with no `load`
+command, even though the source has it). Because it's tracked, staleness at least
+shows up as a clean `git status` when it should be dirty — if you changed the kernel
+and `web/kernel-v86.bin` didn't change, you forgot to re-stage.
+
+Manual direct upload (`make redeploy-web`) still works as a fallback and includes
+whatever is on disk, but the next git push to the production branch replaces the
+deployment with a git build — so the repo, not your working tree, must stay the
+source of truth for runtime assets.
 
 The toolchain auto-detects by OS (macOS → the `x86_64-elf-` cross-binutils), so no
 `LD=…`/`OBJCOPY=…` flags are needed; override on the command line if your setup
 differs. `redeploy-web` needs Node + a one-time `wrangler login`; set the project
-with `CF_PAGES_PROJECT=yourname`. **Caveat:** a later `git push` to a git-connected
-Pages project redeploys *without* the assets (they're gitignored), so after any push
-you want live, re-run `make redeploy-web` — or make Pages direct-upload-only so the
-two don't fight.
+with `CF_PAGES_PROJECT=yourname`.
 
 ## Notes
 

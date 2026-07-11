@@ -7,19 +7,16 @@
 
 # Kernel image staged into the web tutorial (produced by `make web`)
 /web/kernel.bin
-# Optional self-hosted v86 assets (see web/README.md)
-/web/libv86.js
-/web/v86.wasm
-/web/*.bin
-# Staged for the browser tutorial by `make web` (reproducible; not committed)
+# Staged for the browser tutorial by `make web` (reproducible; not committed —
+# no page fetches it; qemu-wasm packs its own FS)
 /web/ziran.iso
-# qemu-wasm live-boot assets (built by web/build-qemu-wasm.sh, ~60 MB — not committed).
-# Emscripten keeps the qemu-system-x86_64.* names (baked into out.js); out.js/load.js
-# are the renamed glue + FS loader.
-/web/out.js
-/web/load.js
-/web/qemu-system-x86_64.*
-/web/vendor/
+
+# NOTE: the other web runtime assets (vendor/, libv86.js, v86.wasm, seabios.bin,
+# vgabios.bin, kernel-v86.bin, out.js, load.js, qemu-system-x86_64.*) ARE tracked,
+# deliberately: the Pages project deploys from git, so anything a page fetches must
+# be committed or production 404s it (see docs/DEPLOY.md). All are under Pages'
+# 25 MiB per-file cap. `web/kernel-v86.bin` is a build artifact — re-stage it with
+# `make stage-web-kernel` and commit it whenever the kernel changes.
 
 # Tier-2 CTF exploit recipe (kept out of the public repo so the live challenge
 # isn't pre-solved for a reader/scraper; the *concept* stays public, the concrete
@@ -35,3 +32,6 @@
 
 # Claude Code local worktrees (transient; never publish)
 .claude/worktrees/
+
+# wrangler local state (dropped by `npx wrangler` runs)
+.wrangler/
