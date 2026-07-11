@@ -150,7 +150,7 @@ impl<'a> Fs<'a> {
     /// authority (out of scope). This is M15's deepest lesson one layer down:
     /// validating against a value the caller controls is not validation.
     pub fn mount(image: &'a [u8]) -> Result<Fs<'a>, FsError> {
-        Self::mount_inner(image, true)
+        Self::mount_inner(image, true, false)
     }
 
     /// The **deliberately loose** reader: identical to [`mount`](Fs::mount) except
@@ -164,15 +164,34 @@ impl<'a> Fs<'a> {
     /// real system trusts. The one-line difference from `mount` — the extent
     /// ceiling — *is* the milestone.
     pub fn mount_loose(image: &'a [u8]) -> Result<Fs<'a>, FsError> {
-        Self::mount_inner(image, false)
+        Self::mount_inner(image, false, false)
     }
 
-    /// Shared parse for [`mount`](Fs::mount) (`confine = true`) and
-    /// [`mount_loose`](Fs::mount_loose) (`confine = false`). The only behavioural
-    /// difference is whether a file extent is ceilinged by `data_end` or by the
-    /// image length — everything else (magic, version, sizes, the directory tree's
-    /// disjoint/forward/depth validation) is identical.
-    fn mount_inner(image: &'a [u8], confine: bool) -> Result<Fs<'a>, FsError> {
+    /// The **Tier-2 CTF reader** — a deliberately vulnerable reader that both leaves
+    /// extents unconfined (like [`mount_loose`](Fs::mount_loose)) *and* trusts the
+    /// header's declared `total_size` instead of requiring it to equal the real
+    /// buffer length. That second relaxation is the whole Tier-2 lesson: the CTF host
+    /// mounts a buffer of `[the player's uploaded image | a per-session flag]`, tells
+    /// this reader the disk is only the player's part, and the reader *believes the
+    /// size in the attacker's header* — so a crafted extent runs off the end of the
+    /// player's bytes into the appended flag it was never given. The secret lives
+    /// **outside the player's own upload** (only in the server's RAM), which is what
+    /// makes it a real capture rather than the white-box Tier-1 sandbox. Like
+    /// [`mount_loose`], this is a teaching device and must never be a trusted reader.
+    /// Validating against a length the caller supplies is not validation.
+    pub fn mount_tier2(image: &'a [u8]) -> Result<Fs<'a>, FsError> {
+        Self::mount_inner(image, false, true)
+    }
+
+    /// Shared parse for [`mount`](Fs::mount) (`confine = true`),
+    /// [`mount_loose`](Fs::mount_loose) (`confine = false`), and
+    /// [`mount_tier2`](Fs::mount_tier2) (`trust_declared_size = true`). `confine`
+    /// picks the file-extent ceiling (`data_end` vs the image length);
+    /// `trust_declared_size` relaxes the `total_size == image.len()` cross-check to
+    /// `total_size <= image.len()` (the Tier-2 length-confusion bug). Everything else
+    /// — magic, version, `data_end` range, the directory tree's disjoint/forward/
+    /// depth validation — is identical across all three.
+    fn mount_inner(image: &'a [u8], confine: bool, trust_declared_size: bool) -> Result<Fs<'a>, FsError> {
         if image.len() < SUPERBLOCK_LEN {
             return Err(FsError::Truncated);
         }
@@ -182,9 +201,18 @@ impl<'a> Fs<'a> {
         if read_u16_le(image, 0x04) != VERSION {
             return Err(FsError::UnsupportedVersion);
         }
-        // The header's total_size must match the actual image length — the field's
-        // self-consistency cross-check, and one more thing a corrupt image trips.
-        if read_u32_le(image, 0x08) as usize != image.len() {
+        // The header's total_size vs the actual image length. Normally this must
+        // match exactly — a self-consistency cross-check a corrupt image trips. The
+        // Tier-2 reader (`trust_declared_size`) relaxes it to "must not exceed the
+        // buffer": it *believes* the attacker's declared size, so a smaller declared
+        // size over a larger real buffer (image bytes + the appended flag) passes —
+        // and that is precisely the bug that lets a crafted extent read the flag.
+        let declared = read_u32_le(image, 0x08) as usize;
+        if trust_declared_size {
+            if declared > image.len() {
+                return Err(FsError::SizeMismatch);
+            }
+        } else if declared != image.len() {
             return Err(FsError::SizeMismatch);
         }
         // The data-region ceiling (v3). It must lie within the image and past the
@@ -730,5 +758,60 @@ pub fn self_test() {
     );
     crate::serial_println!(
         "M16: filesystem boundary -- flag leaked by the loose reader, contained by data_end confinement"
+    );
+
+    // ---- Tier-2 remote-capture reader (`mount_tier2`) -------------------------
+    // Unlike Tier 1 (the flag is in the player's own image), here the secret lives
+    // OUTSIDE anything the player uploaded: the CTF host appends a per-session flag
+    // past the uploaded bytes and mounts the whole buffer with the length-trusting
+    // reader. A crafted extent reaching into the appended region leaks it; the strict
+    // reader, which believes the disk is only the player's part, rejects the same
+    // extent. This is what makes Tier 2 a *real* capture, not a white-box sandbox.
+    let flag_region = {
+        let mut r = Vec::with_capacity(64);
+        r.extend_from_slice(b"FLAG{tier2-selftest}");
+        r.resize(64, 0); // NUL-pad to the fixed 64-byte region
+        r
+    };
+    // A minimal 48-byte player image (superblock + one file entry) whose file's
+    // extent points at [48, 112) — past its own bytes, where the flag will land.
+    let crafted = {
+        let n = SUPERBLOCK_LEN + DIRENT_LEN; // 48
+        let mut img = Vec::with_capacity(n);
+        img.extend_from_slice(&MAGIC);
+        img.extend_from_slice(&VERSION.to_le_bytes());
+        img.extend_from_slice(&1u16.to_le_bytes()); //         one file
+        img.extend_from_slice(&(n as u32).to_le_bytes()); //   total_size = 48 (honest player size)
+        img.extend_from_slice(&(n as u32).to_le_bytes()); //   data_end = 48
+        write_entry(&mut img, "loot", n as u32, 64, KIND_FILE); // extent [48, 112)
+        img
+    };
+    // CONTAINED: the strict reader sees only the player's 48-byte upload, so the
+    // extent reaching to 112 is simply past the image — rejected as out of bounds.
+    // The flag region is not part of what the player uploaded, so it is unreachable.
+    assert_eq!(
+        Fs::mount(&crafted).err(),
+        Some(FsError::EntryOutOfBounds),
+        "tier2: strict mount must reject an extent past the player's own bytes"
+    );
+    // CAPTURED: the host appends the flag and mounts the whole buffer with
+    // `mount_tier2`, which trusts the header's declared size — so the crafted extent
+    // reads the appended flag the player never had.
+    let backing = {
+        let mut b = crafted.clone();
+        b.extend_from_slice(&flag_region);
+        b
+    };
+    let fs2 = Fs::mount_tier2(&backing).expect("tier2: crafted image must mount under the loose reader");
+    let looted = fs2.read_path("/loot").expect("tier2: crafted file unreadable");
+    assert!(
+        looted.starts_with(b"FLAG{tier2-selftest}"),
+        "tier2: the server-appended flag must leak through the crafted extent"
+    );
+    // And the strict reader over that same backing buffer refuses — the declared size
+    // no longer matches, so the length lie is caught.
+    assert_eq!(Fs::mount(&backing).err(), Some(FsError::SizeMismatch));
+    crate::serial_println!(
+        "[m16] tier-2: mount_tier2 leaked a server-appended flag via a crafted extent; strict mount contained it"
     );
 }

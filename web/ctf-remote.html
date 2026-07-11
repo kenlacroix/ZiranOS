@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ziran OS — Filesystem CTF, Tier 2 (remote capture)</title>
+  <meta name="description" content="Tier 2 of the Ziran OS filesystem CTF — a remote capture. A unique flag is minted per session and lives only in the server's RAM (not in this page, the repo, or any bytes you're given). Steal it over the wire by exploiting a from-scratch kernel's filesystem.">
+  <link rel="canonical" href="https://ziranos.pages.dev/ctf-remote">
+  <meta name="robots" content="index, follow">
+  <meta name="author" content="Kenneth LaCroix">
+  <meta name="theme-color" content="#0b0e14">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Ziran OS">
+  <meta property="og:url" content="https://ziranos.pages.dev/ctf-remote">
+  <meta property="og:title" content="Ziran OS — Filesystem CTF, Tier 2 (remote capture)">
+  <meta property="og:description" content="A real remote capture-the-flag: a per-session flag lives only in a server's RAM. Steal it over the wire from a from-scratch kernel you can't otherwise read.">
+  <meta property="og:image" content="https://ziranos.pages.dev/og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="A terminal capturing a FLAG from a remote Ziran OS kernel">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Ziran OS — Filesystem CTF, Tier 2 (remote capture)">
+  <meta name="twitter:description" content="A per-session flag lives only in the server's RAM. Steal it over the wire.">
+  <meta name="twitter:image" content="https://ziranos.pages.dev/og.png">
+  <link rel="stylesheet" href="./vendor/xterm.css">
+  <!-- Cloudflare Turnstile: a human check before the server spins up a VM. Loads
+       cross-origin, so this page is exempted from COEP in _headers (it uses no
+       wasm/SharedArrayBuffer, so it doesn't need cross-origin isolation). -->
+  <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+  <style>
+    :root { color-scheme: dark; }
+    body { background:#0b0e14; color:#cdd6f4; font-family:system-ui,sans-serif; margin:0; padding:1rem 1.25rem 4rem; line-height:1.5; }
+    h1 { font-size:1.15rem; margin:.2rem 0; }
+    h2 { font-size:1rem; margin:1.4rem 0 .4rem; color:#f9e2af; }
+    p, li { max-width:74ch; }
+    .note { opacity:.8; font-size:.88rem; }
+    code, kbd { color:#a6e3a1; font-family:ui-monospace,monospace; }
+    a { color:#89b4fa; }
+    #terminal { height:60vh; margin-top:.5rem; }
+    #status { font-size:.8rem; opacity:.7; margin-top:.4rem; min-height:1.2em; }
+    .panel { background:#11151f; border:1px solid #1e2536; border-radius:8px; padding:.9rem 1rem; margin-top:1rem; }
+    button { background:#1e2536; color:#cdd6f4; border:1px solid #45507a; border-radius:6px; padding:.5rem .9rem; font-size:.9rem; cursor:pointer; }
+    button:hover { background:#28304a; } button.primary { background:#3651a8; border-color:#5670d0; } button:disabled { opacity:.5; cursor:default; }
+    details { margin:.5rem 0; border-left:2px solid #313a52; padding-left:.8rem; } summary { cursor:pointer; color:#89b4fa; font-size:.92rem; }
+    .banner { background:#2a1e1e; border:1px solid #6d3b3b; border-radius:8px; padding:.7rem .9rem; font-size:.85rem; }
+    .capture { display:none; background:#12261a; border:1px solid #2e6b3f; border-radius:8px; padding:.9rem 1rem; margin-top:1rem; }
+    .capture.show { display:block; } .capture h2 { margin:.1rem 0 .4rem; color:#a6e3a1; }
+    .flag { font-family:ui-monospace,monospace; color:#a6e3a1; word-break:break-all; }
+    footer { margin-top:2rem; padding-top:1rem; border-top:1px solid #1e2536; font-size:.82rem; opacity:.75; }
+    .dim { opacity:.7; }
+  </style>
+</head>
+<body>
+  <h1>Ziran OS — Filesystem CTF <span class="dim">· Tier 2 (remote capture)</span></h1>
+  <p class="note">
+    This kernel runs on a <b>server</b>, not in your tab. A unique <code>FLAG{…}</code>
+    was minted for your session and injected into that instance's RAM — it is
+    <b>not in this page, not in the repo, and not in any bytes you're given.</b> The
+    only way to get it is to make the filesystem hand it to you over the wire.
+    <a href="./ctf.html">← Tier 1 (practice, in your browser)</a>
+  </p>
+
+  <div class="banner">
+    <b>Why this one is real.</b> In Tier 1 the flag is in your own image, so
+    <code>strings</code>/DevTools reach it — it's a sandbox to learn the bug. Here the
+    secret lives only in the server, so nothing local reveals it. You develop the
+    exploit against Tier 1, then <b>land it here</b> to capture a flag you genuinely
+    could not see. The bug: the server's reader trusts the length in <i>your</i>
+    header, so a file extent that runs off the end of your upload reads a secret the
+    host planted past it. <b>You craft and drive the exploit yourself</b> in the
+    terminal — there's no one-click button here (that's Tier 1's job). And the flag's
+    exact offset is <b>per session</b>: <code>load</code> prints where it sits for
+    <i>your</i> instance, so a copied writeup won't hit it — you have to aim at the
+    offset this session gives you.
+  </div>
+
+  <div id="gate" class="panel">
+    <p class="note" style="margin-top:.2rem">Quick human check to connect — it keeps
+      bots from spinning up VMs on the server:</p>
+    <div class="cf-turnstile" data-sitekey="0x4AAAAAADv_SIK04tIy5kem"
+         data-callback="onTurnstileSuccess" data-theme="dark"></div>
+  </div>
+
+  <div id="terminal" role="application" aria-label="Ziran OS remote kernel terminal — type commands"></div>
+  <div id="status">complete the check above to connect…</div>
+
+  <div class="capture" id="capture">
+    <h2>🚩 Captured!</h2>
+    <p>You made the remote filesystem hand you a flag that was only ever in its RAM:
+      <span class="flag" id="capture-flag"></span></p>
+    <p class="note">
+      That's a real remote capture — the same length-confusion primitive as Tier 1,
+      but the secret was never in anything you were given.
+      <a href="https://github.com/kenlacroix/ZiranOS/issues/new?template=ctf-writeup.md" target="_blank" rel="noopener">Submit a writeup</a>
+      to get on the <a href="https://github.com/kenlacroix/ZiranOS/blob/HEAD/SOLVERS.md" target="_blank" rel="noopener">solvers list</a>.
+    </p>
+  </div>
+
+  <div class="panel">
+    <h2 style="margin-top:.2rem">Submit your flag</h2>
+    <p class="note">
+      Once you've made the remote filesystem print <code>FLAG{ziran-tier2-…}</code>,
+      submit it here. It's checked <b>server-side by hash</b> against the flag minted
+      for your session — the page never learns the answer, and a flag scraped from
+      the repo or this page won't verify.
+    </p>
+    <div style="display:flex; gap:.5rem; align-items:center; flex-wrap:wrap">
+      <input id="flag-input" type="text" size="40" aria-label="Flag to verify" placeholder="FLAG{ziran-tier2-…}"
+             style="background:#0b0e14; color:#a6e3a1; border:1px solid #45507a; border-radius:6px; padding:.5rem .6rem; font-family:ui-monospace,monospace">
+      <button class="primary" id="submit">Verify</button>
+      <span class="note" id="submit-status"></span>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2 style="margin-top:.2rem">The idea <span class="dim">(concept, not a recipe)</span></h2>
+    <p class="note">
+      The <b>concept</b> is the same length-confusion bug you already broke in
+      <a href="./ctf.html">Tier 1</a>: the reader trusts a length your header supplies
+      instead of the real buffer, and leaves file extents unconfined — so an extent
+      that runs past your upload reads server bytes you were never given.
+      <i>Validating against a length the caller supplies is not validation.</i>
+    </p>
+    <p class="note" style="opacity:.72">
+      <b>Scope:</b> this is one bug class — a classic
+      <a href="https://cwe.mitre.org/data/definitions/125.html" target="_blank" rel="noopener">out-of-bounds read</a>
+      (CWE-125), and a <i>logical</i> one: safe-Rust slicing keeps every read inside the
+      buffer, so it's information disclosure past a fence, not memory corruption. One
+      deliberately-planted path — not a hardened kernel's real attack surface. Go deeper:
+      <a href="https://googleprojectzero.blogspot.com/" target="_blank" rel="noopener">Project Zero</a> ·
+      <a href="http://langsec.org/" target="_blank" rel="noopener">LangSec</a> ·
+      <a href="https://pwn.college/" target="_blank" rel="noopener">pwn.college</a> ·
+      <a href="./ctf.html">the Tier-1 scope note</a>.
+    </p>
+    <details><summary>How this differs from Tier 1</summary><p class="note">
+      The secret isn't in your image — the host plants it past your upload, so no
+      local <code>strings</code>/DevTools can reach it. And its offset is
+      <b>per session</b>: on a successful <code>load</code> the kernel prints the exact
+      offset where the secret sits <i>for your instance</i>. Read that line, then craft
+      an extent that reaches it. A fixed offset copied from a writeup won't land —
+      that's the point.</p></details>
+    <p class="note">
+      Develop and rehearse the full byte-level exploit in the free
+      <a href="./ctf.html">Tier-1 sandbox</a> (where the flag is your own, so you can
+      iterate), then reproduce it here against the offset this session hands you.
+      Drive it by hand in the terminal: <code>load</code> ⏎, paste your crafted base64
+      image, <code>.</code> ⏎, then <code>cat</code> the crafted file.
+    </p>
+  </div>
+
+  <footer>
+    <span style="font-family:ui-monospace,monospace">自然 · Ziran OS</span> — a from-scratch x86-64 hobby OS.
+    Built by <a href="https://www.kennethlacroix.me" target="_blank" rel="noopener">Kenneth LaCroix</a> ·
+    <a href="https://github.com/kenlacroix/ZiranOS" target="_blank" rel="noopener">source</a> ·
+    <a href="./index.html">guided tour</a>
+  </footer>
+
+  <!--
+    Honeytoken tripwire — this is NOT the flag. It is a fixed, public decoy. The real
+    flag is minted per session and only ever printed by the running kernel, so the
+    only way to submit this exact value is to have scraped the page/repo instead of
+    landing the exploit. The server verifies by hash, rejects it, and logs the attempt
+    as a shortcut. See ctf-server/bridge.mjs (HONEYTOKEN). Diligent solvers never see
+    it; only an automated grab of "the flag in the page" trips it.
+  -->
+  <span hidden data-example-flag="FLAG{ziran-tier2-0000000000dec0de}"></span>
+
+  <script type="module">
+    import './vendor/xterm.js'; // window.Terminal
+
+    // The bridge endpoint. Default to the tunnel host; override for testing with
+    // ?ws=wss://host/ (or ws://127.0.0.1:8080/ against a local bridge).
+    const WS_URL = new URLSearchParams(location.search).get('ws') || 'wss://ctf.kennethlacroix.me/';
+    const status = (t) => { document.getElementById('status').textContent = t; };
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const dec = new TextDecoder();
+
+    const term = new Terminal({ cols: 100, rows: 26, convertEol: true });
+    term.open(document.getElementById('terminal'));
+    term.focus();
+
+    // ---- capture detection: the server's per-session flag format ----------------
+    // Seeing the flag in the terminal means the exploit landed (it only prints if a
+    // crafted extent reached the planted secret). We prefill the submit box and ask
+    // the SERVER to verify it by hash — the client never decides a capture is real.
+    let submitted = '', seen = '';
+    const FLAG_RE = /FLAG\{ziran-tier2-[0-9a-f]+\}/;
+    const origWrite = term.write.bind(term);
+    term.write = (data, cb) => {
+      const s = typeof data === 'string' ? data : dec.decode(data);
+      seen = (seen + s).slice(-4096);
+      const m = seen.match(FLAG_RE);
+      if (m && m[0] !== submitted) {
+        document.getElementById('flag-input').value = m[0];
+        submitFlag(m[0]); // auto-verify what we saw, server-side
+      }
+      return origWrite(data, cb);
+    };
+
+    // ---- WebSocket transport: terminal <-> the bridge's serial pipe -------------
+    // The socket also carries a small control channel (flag submit / verify result),
+    // distinguished by a 4-byte "\0CTL" prefix the kernel never emits over serial.
+    const CTL = new Uint8Array([0x00, 0x43, 0x54, 0x4c]);
+    const isCtl = (u8) => u8.length >= 4 && u8[0] === 0 && u8[1] === 67 && u8[2] === 84 && u8[3] === 76;
+    const setSubmitStatus = (t) => { document.getElementById('submit-status').textContent = t; };
+    let ws, connected = false;
+
+    // Send a captured flag to the bridge for server-side hash verification.
+    function submitFlag(flag) {
+      if (!FLAG_RE.test(flag)) { setSubmitStatus('that is not a FLAG{ziran-tier2-…} string'); return; }
+      if (!ws || ws.readyState !== WebSocket.OPEN) { setSubmitStatus('not connected'); return; }
+      submitted = flag;
+      const body = new TextEncoder().encode(JSON.stringify({ type: 'submit', flag }));
+      const frame = new Uint8Array(CTL.length + body.length);
+      frame.set(CTL, 0); frame.set(body, CTL.length);
+      ws.send(frame);
+      setSubmitStatus('verifying…');
+    }
+
+    function onVerify(result) {
+      if (result === 'correct') {
+        setSubmitStatus('');
+        document.getElementById('capture-flag').textContent = submitted;
+        const el = document.getElementById('capture');
+        el.classList.add('show');
+        el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      } else if (result === 'honeytoken') {
+        setSubmitStatus('⚠ that is the public decoy — the real flag is per-session. Land the exploit on THIS instance.');
+      } else {
+        setSubmitStatus('✗ not this session’s flag.');
+      }
+    }
+
+    function connect(token) {
+      if (connected) return;
+      connected = true;
+      // The bridge verifies the Turnstile token (?t=) before spawning a VM.
+      const url = token ? WS_URL + (WS_URL.includes('?') ? '&' : '?') + 't=' + encodeURIComponent(token) : WS_URL;
+      status('connecting …');
+      ws = new WebSocket(url);
+      ws.binaryType = 'arraybuffer';
+      ws.onopen = () => status('connected — the server is booting the kernel…');
+      ws.onmessage = (e) => {
+        if (typeof e.data === 'string') { term.write(e.data); return; }
+        const u8 = new Uint8Array(e.data);
+        if (isCtl(u8)) { // control frame: a verify result
+          try { const msg = JSON.parse(dec.decode(u8.subarray(4))); if (msg.type === 'verify') onVerify(msg.result); } catch {}
+          return;
+        }
+        term.write(u8);
+      };
+      ws.onclose = (e) => status('disconnected (' + (e.reason || 'code ' + e.code) + '). reload to reconnect.');
+      ws.onerror = () => status('connection error — the server may be busy or down.');
+      term.onData((d) => { if (ws && ws.readyState === WebSocket.OPEN) ws.send(d); });
+    }
+
+    // Turnstile calls this once the human check passes; then we connect and hide the
+    // gate. (If the bridge has no secret set, the token is simply ignored.)
+    window.onTurnstileSuccess = (token) => {
+      const g = document.getElementById('gate');
+      if (g) g.style.display = 'none';
+      connect(token);
+    };
+
+    // Testing against a specific bridge (?ws=…) skips the gate — that bridge is
+    // assumed to have no Turnstile secret. The default (production) waits for the
+    // check above.
+    if (new URLSearchParams(location.search).get('ws')) {
+      const g = document.getElementById('gate');
+      if (g) g.style.display = 'none';
+      connect();
+    }
+
+    document.getElementById('submit').onclick = () => submitFlag(document.getElementById('flag-input').value.trim());
+    document.getElementById('flag-input').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') submitFlag(e.target.value.trim());
+    });
+  </script>
+</body>
+</html>

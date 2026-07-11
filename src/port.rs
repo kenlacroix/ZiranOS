@@ -36,3 +36,18 @@ pub unsafe fn inb(port: u16) -> u8 {
     );
     value
 }
+
+/// Write a 16-bit word to an I/O port. Needed for registers wider than a byte —
+/// e.g. the QEMU `fw_cfg` selector at port 0x510 (see `fw_cfg`).
+///
+/// SAFETY: as [`outb`] — the caller must know the port and value are correct for
+/// the device being programmed.
+#[inline]
+pub unsafe fn outw(port: u16, value: u16) {
+    core::arch::asm!(
+        "out dx, ax",
+        in("dx") port,
+        in("ax") value,
+        options(nomem, nostack, preserves_flags),
+    );
+}

@@ -177,10 +177,12 @@ Read the self-tests that CI asserts on every push. Read the reviews and the
 retros. Watch a real recorded session drive the shell over the serial line —
 `ps`, `ls`, `cd`, `cat`, the `is a directory` refusal, all live. Find the
 `FLAG{ziran-boundary-leak}` planted on the disk — bytes with no directory entry,
-unreachable by any `ls` or `cat`, waiting for a future milestone to try to steal
-them. Or just boot the thing yourself: `./run` drops the shell onto your
-terminal over the serial line, and a browser build that boots the real kernel is
-on the way. Type `ls`, `cd docs`, `cat filesystem.txt`. It's all right there —
-the mechanisms, and the proof that they're mechanisms and not magic.
+unreachable by any `ls` or `cat`. The security milestones (M15/M16) went on to
+steal it, and it's now a live **capture-the-flag against the kernel itself**, where
+you can too. Or just boot the thing yourself — real QEMU compiled to WebAssembly
+runs the actual 64-bit kernel to an interactive shell **in your browser** at
+[ziranos.pages.dev](https://ziranos.pages.dev). Type `ls`, `cd docs`,
+`cat filesystem.txt`. It's all right there — the mechanisms, and the proof that
+they're mechanisms and not magic.
 
 That was the point.

@@ -385,7 +385,7 @@
       "programmingLanguage": ["Rust", "Assembly"],
       "runtimePlatform": "x86-64 bare metal (QEMU)",
       "author": { "@id": "https://ziranos.pages.dev/#author" },
-      "license": "https://github.com/kenlacroix/ZiranOS/blob/HEAD/LICENSE-MIT"
+      "license": "https://github.com/kenlacroix/ZiranOS/blob/HEAD/LICENSE"
     },
     {
       "@type": "FAQPage",
@@ -403,7 +403,7 @@
         {
           "@type": "Question",
           "name": "Is it really running inside my browser?",
-          "acceptedAnswer": { "@type": "Answer", "text": "The green screen on the main page is a faithful reconstruction — the exact output the real kernel prints, replayed. But you can also boot the genuine 64-bit kernel live in the browser: the 'Boot the real kernel' button loads real QEMU compiled to WebAssembly and boots it to an interactive shell (a one-time ~17 MB download)." }
+          "acceptedAnswer": { "@type": "Answer", "text": "The green screen on the main page is a faithful reconstruction — the exact output the real kernel prints, replayed. But you can also boot the genuine 64-bit kernel live in the browser: the 'Boot the real kernel' button loads real QEMU compiled to WebAssembly and boots it to an interactive shell (a one-time ~5 MB download)." }
         },
         {
           "@type": "Question",
@@ -413,7 +413,7 @@
         {
           "@type": "Question",
           "name": "Can I try breaking it myself?",
-          "acceptedAnswer": { "@type": "Answer", "text": "Yes — the filesystem CTF boots the real kernel in your tab and challenges you to craft a disk image that makes the filesystem leak a flag it was built to hide: the exact exploit from milestone 16, in your hands." }
+          "acceptedAnswer": { "@type": "Answer", "text": "Yes. Tier 1 boots the real kernel in your tab and challenges you to craft a disk image that makes the filesystem leak a hidden flag — the exact exploit from milestone 16, in your hands. Tier 2 is a live remote capture where a per-session flag lives only in a server's RAM and must be stolen over the wire." }
         }
       ]
     }
@@ -443,11 +443,34 @@
         <span class="tag">every claim links to <b>real source</b></span>
         <span class="tag">🚩 <a href="ctf.html" style="text-decoration:none">a live <b>CTF</b> to attack it</a></span>
       </div>
+      <div style="margin-top:1.1rem">
+        <a class="btn primary" href="#screen" style="text-decoration:none">▸ Boot it in this tab</a>
+      </div>
     </div>
   </div>
 </header>
 
 <main class="wrap">
+  <!-- ATTACK IT — surface the CTF near the top -->
+  <style>
+    .attack{margin:1.6rem 0 .4rem}
+    .attack h2{font-size:1.1rem;margin:0 0 .7rem}
+    .attack-cards{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
+    .attack-card{border:1px solid #2a3142;border-radius:10px;padding:1rem 1.15rem;background:#11161b;color:#cdd6f4;text-decoration:none;transition:border-color .15s,transform .15s}
+    .attack-card:hover{border-color:#89b4fa;transform:translateY(-2px)}
+    .attack-card b{display:block;font-size:1.12rem;margin-bottom:.35rem}
+    .attack-card p{margin:0;font-size:.92rem;opacity:.82;line-height:1.45}
+    .attack-card code{color:#a6e3a1}
+    @media(max-width:700px){.attack-cards{grid-template-columns:1fr}}
+  </style>
+  <section class="attack">
+    <h2>Or skip the tour and attack it &rarr;</h2>
+    <div class="attack-cards">
+      <a class="attack-card" href="ctf.html"><b>🚩 Tier 1 — break it in your tab</b><p>Craft a disk image that makes the kernel's own filesystem hand you a flag <code>ls</code> can't see. White-box practice — the flag's yours, so iterate freely.</p></a>
+      <a class="attack-card" href="ctf-remote.html"><b>🌐 Tier 2 — steal a live server's flag</b><p>A per-session flag lives only in a running server's RAM — not in this page or the repo. Land the same exploit over the wire to capture it.</p></a>
+    </div>
+  </section>
+
   <!-- WHY THIS EXISTS / ANTI-SLOP -->
   <section class="why">
     <div class="why-in">
@@ -494,11 +517,12 @@
           <div class="vig"></div>
         </div>
         <div class="controls">
-          <button class="btn primary" id="boot">▸ Boot</button>
+          <button class="btn" id="boot">▸ Replay boot</button>
           <button class="btn" id="restart">↺ Restart</button>
-          <a class="btn" id="boot-real" href="qemu-wasm.html" target="_blank" rel="noopener" title="Runs real QEMU compiled to WebAssembly to boot the actual 64-bit kernel to an interactive shell — not a replay. One-time ~17 MB download.">▸ Boot the real kernel (~17 MB)</a>
+          <a class="btn primary" id="boot-real" href="qemu-wasm.html" target="_blank" rel="noopener" title="Runs real QEMU compiled to WebAssembly to boot the actual 64-bit kernel to an interactive shell — not a replay. One-time ~5 MB download.">▸ Boot the real kernel (~5 MB)</a>
           <a class="btn" href="replay.html" title="A real recording of the actual kernel captured over serial — boot, ps, mem, ls, cd, cat">▸ Watch a real session</a>
           <a class="btn" href="ctf.html" title="Craft a filesystem image and make the running kernel leak a hidden flag — the Tier-1 CTF, live in your browser">🚩 Filesystem CTF</a>
+          <a class="btn" href="ctf-remote.html" title="The remote capture: a per-session flag lives only in a server's RAM — steal it over the wire. Tier 2.">🌐 Remote capture (Tier 2)</a>
           <span class="badge" id="hint" style="align-self:center">click the screen, then type</span>
         </div>
       </div>
@@ -583,7 +607,7 @@ make debug      # boot frozen, attach GDB</code>
         <summary>Is it really running inside my browser?</summary>
         <div class="a">
           <p>Honest answer: what you see is a <b>faithful reconstruction</b> — every line on that green screen is exactly what the real kernel prints, replayed here. It is not a mock-up or marketing text; it’s the true output, character for character.</p>
-          <p>The lightweight emulator embedded in this page, <b>v86</b>, only emulates a <em>32-bit</em> PC and can’t switch into the 64-bit mode our kernel needs — so the green screen here is a reconstruction rather than a fake “live” demo. But you <em>can</em> boot the genuine article in your browser: the <b>▸ Boot the real kernel</b> button loads real QEMU compiled to WebAssembly and boots the actual 64-bit kernel to an interactive shell, live in the tab (a one-time ~17 MB download). And <a href="ctf.html">the filesystem CTF</a> runs that same live kernel so you can attack it.</p>
+          <p>The lightweight emulator embedded in this page, <b>v86</b>, only emulates a <em>32-bit</em> PC and can’t switch into the 64-bit mode our kernel needs — so the green screen here is a reconstruction rather than a fake “live” demo. But you <em>can</em> boot the genuine article in your browser: the <b>▸ Boot the real kernel</b> button loads real QEMU compiled to WebAssembly and boots the actual 64-bit kernel to an interactive shell, live in the tab (a one-time ~5 MB download). And <a href="ctf.html">the filesystem CTF</a> runs that same live kernel so you can attack it.</p>
         </div>
       </details>
       <details class="qa">
@@ -597,7 +621,7 @@ make debug      # boot frozen, attach GDB</code>
         <summary>Can I try breaking it myself?</summary>
         <div class="a">
           <p>Yes — that’s the newest part. The <a href="ctf.html">🚩 filesystem CTF</a> boots the real kernel in your tab and challenges you to craft a disk image that makes the filesystem leak a flag it was built to hide — the exact exploit from milestone 16, in your hands. It’s a white-box sandbox on purpose: the lesson is the exploit primitive, not the secret.</p>
-          <p>A Tier-2 version — same exploit, but the flag lives only on a remote server and the capture has to land over the wire — is built and being hardened for public launch. It isn’t live yet; the CTF page says so honestly.</p>
+          <p>A Tier-2 version — same exploit, but the flag lives only in a server’s RAM and the capture has to land over the wire — is <b>live</b>: <a href="ctf-remote.html">the remote capture</a>. Develop the exploit in Tier 1 (where the flag is your own, so you can iterate), then reproduce it against the per-session offset the remote kernel prints for your instance.</p>
         </div>
       </details>
       <details class="qa">
@@ -845,7 +869,7 @@ make debug      # boot frozen, attach GDB</code>
      links:[["src/keyboard.rs","keyboard.rs"],["src/pic.rs","pic.rs"],["docs/concepts/keyboard-and-pic.md","keyboard-and-pic.md (explainer)"]]},
     {n:"06", ms:"Milestone 6 · memory", title:"Learning what it has",
      eli5:"The machine’s memory is a patchwork — some usable, some off-limits, some just empty gaps — and the kernel starts out blind to all of it. So it reads the map the startup code left behind, then hires a librarian who lends out memory in identical little chunks and, the real trick, takes them back so the very same chunk can be lent out again.",
-     watch:"The “[ok] physical memory: … MiB free in the frame allocator” line (the amount depends on the machine — the browser emulator has 64 MiB).",
+     watch:"The “[ok] physical memory: … MiB free in the frame allocator” line (the reconstruction shows 121 MiB).",
      q:"How does the kernel know how much RAM the machine has — can it just start using memory from address 0 upward?",
      a:"No. Physical memory is a patchwork: real RAM, firmware-reserved regions, memory-mapped devices, and plain holes, all interleaved. The kernel can’t safely probe it — reading a device register has side effects. So the bootloader (GRUB), which surveyed the machine before our code ran, hands over a map, and the kernel manages only the parts marked usable.",
      ex:"<p>Usable RAM is chopped into 4 KiB <em>frames</em>, and a <em>bitmap allocator</em> tracks each one with a single bit — free or used. It hands a frame out, takes it back, and — the part that makes it a real allocator and not a counter — returns the <em>same</em> frame on the next request after you free it. It carefully reserves the frames it must never give away: frame 0 (null), the kernel’s own image, and the boot structure itself. This is the bottom of the memory stack; paging and the heap are built directly on it.</p>",
@@ -1079,9 +1103,12 @@ make debug      # boot frozen, attach GDB</code>
   })();
   // resolve a #step-NN hash to a STEPS index, or -1.
   function stepFromHash(){
-    var m=(location.hash||"").match(/step-(\d+)/); if(!m) return -1;
-    var want=("0"+parseInt(m[1],10)).slice(-2);
-    return STEPS.map(function(s){return s.n;}).indexOf(want);
+    var h; try{ h=decodeURIComponent(location.hash||""); }catch(e){ h=location.hash||""; }
+    var names=STEPS.map(function(s){return s.n;});
+    var raw=h.replace(/^#step-/,"");
+    if(raw && names.indexOf(raw)>=0) return names.indexOf(raw);   // exact match (handles the "✓" conclusion step)
+    var m=h.match(/step-(\d+)/); if(!m) return -1;
+    return names.indexOf(("0"+parseInt(m[1],10)).slice(-2));
   }
   // honor a #step-NN deep link on load, otherwise start at step 1.
   (function(){ var i=stepFromHash(); if(i>=0) idx=i; renderStep(); writeHash(); })();
@@ -1252,7 +1279,7 @@ make debug      # boot frozen, attach GDB</code>
   $("boot").addEventListener("click",function(){ screenEl.focus(); boot(); });
   $("restart").addEventListener("click",function(){ boot(); });
 
-  // --- Live boot via qemu-wasm (REAL 64-bit QEMU in WebAssembly; ~17 MB) ---
+  // --- Live boot via qemu-wasm (REAL 64-bit QEMU in WebAssembly; ~5 MB) ---
   // v86 is 32-bit and can't run our long-mode kernel; qemu-wasm can. The live
   // boot lives on its own page, qemu-wasm.html, and is LIVE — the assets built
   // by web/build-qemu-wasm.sh are deployed alongside the site. The control is a

@@ -27,6 +27,9 @@ Environment=HOURLY_BUDGET=1000
 # Optional human gate: set to your Cloudflare Turnstile SECRET key to require a
 # challenge before any session spawns. Leave empty to disable.
 Environment=TURNSTILE_SECRET=
+# Optional decoy flag: set to an all-hex-bodied FLAG{ziran-tier2-...} to trip on
+# scraped-flag submissions. Leave empty to disable. Keep it OUT of version control.
+Environment=HONEYTOKEN=
 # Kill switch: `touch /opt/ziran/PAUSED` to stop accepting new sessions (no restart).
 Environment=PAUSE_FILE=/opt/ziran/PAUSED
 
@@ -41,9 +44,12 @@ ProtectControlGroups=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 RestrictNamespaces=true
 LockPersonality=true
-# Cap the whole service tree; per-instance caps come from systemd-run in bridge.mjs.
-MemoryMax=4G
-CPUQuota=400%
+# Backstop cap on the whole service tree (node + every QEMU). Per-instance caps come
+# from `systemd-run --user` in bridge.mjs (needs `loginctl enable-linger ctf`, done by
+# setup-vm.sh); this tree cap bounds the box even if that falls back to `caps=tree-only`.
+# Sized below total VM RAM (~4 GiB) so a runaway fleet can't OOM the host itself.
+MemoryMax=3G
+CPUQuota=350%
 TasksMax=512
 
 [Install]

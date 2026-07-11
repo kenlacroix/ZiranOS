@@ -26,8 +26,8 @@ policy_out: DROP
 # Anti-spoof: the VM may only use its assigned MAC/IP (blunts L2/ARP tricks).
 ipfilter: 1
 
-[IPSET ipfilter-net0]  # VM LAN NIC — confirm the -net<N> index against the live <VMID>.fw
-192.168.1.66  # <-- REPLACE with the VM's real IP
+[IPSET ipfilter-net1]  # VM LAN NIC — confirm the -net<N> index against the live <VMID>.fw
+192.0.2.66             # <- EXAMPLE (RFC5737): replace with the VM's real LAN IP
 
 # WAN egress allowlist — mirrors the in-VM nftables allowlist so a guest-side flush
 # cannot open WAN egress. Keep in sync with /etc/nftables.conf on the VM.
@@ -53,8 +53,8 @@ ipfilter: 1
 185.125.188.0/22
 
 [RULES]
-# --- INBOUND: LAN admin/Claude SSH only; everything else -> policy_in: DROP ---
-IN ACCEPT -source 192.168.1.0/24 -p tcp -dport 22 -log nolog
+# --- INBOUND: admin/Claude SSH only; everything else -> policy_in: DROP ---
+IN ACCEPT -source 192.0.2.0/24 -p tcp -dport 22 -log nolog   # <- EXAMPLE (RFC5737): your admin LAN/workstation
 
 # --- OUTBOUND: first-match top-down; the rest falls through to policy_out: DROP ---
 # 1) cloud DNS (matches the in-VM 1.1.1.1/1.0.0.1:53 allow)

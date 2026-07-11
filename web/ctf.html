@@ -83,8 +83,8 @@
     browser tab's memory, so yes — DevTools or <code>strings</code> would find it in
     seconds. That's not cheating you out of anything: the point here is to learn the
     <i>exploit primitive</i>, not to keep a secret. The version where the flag is
-    genuinely out of reach (server-side, only extractable by landing the exploit for
-    real) is <b>Tier 2</b> — see the last section.
+    genuinely out of reach — server-side, only extractable by landing the exploit for
+    real — is <b><a href="./ctf-remote.html">Tier 2, the remote capture</a></b>.
   </div>
 
   <div id="terminal" role="application" aria-label="Ziran OS live kernel terminal — click, then type commands"></div>
@@ -140,6 +140,35 @@
     </div>
   </div>
 
+  <details class="panel" id="craft-panel">
+    <summary style="cursor:pointer"><b>✎ Craft mode</b> — set every field yourself <span class="dim">(the on-ramp for Tier 2)</span></summary>
+    <p class="note">
+      The presets build fixed exploits against <em>this</em> disk. Craft mode is a plain
+      ZranFS serializer: set the superblock and directory fields to whatever you like and
+      it emits the base64 — it does <b>not</b> solve anything for you. This is what
+      <a href="./ctf-remote.html">Tier&nbsp;2</a> needs: there the flag sits at a
+      <b>per-session offset the kernel prints</b>, past your upload, so no fixed preset can
+      reach it — you build a fresh image aimed at your instance's offset. Blank fields stay
+      honest. Byte layout: the
+      <a href="https://github.com/kenlacroix/ZiranOS/blob/HEAD/docs/concepts/zranfs-format.md">ZranFS format primer</a>.
+    </p>
+    <div class="row">
+      <label>superblock <code>total_size</code>: <input id="craft-total" type="number" min="0" placeholder="honest"></label>
+      <label>superblock <code>data_end</code>: <input id="craft-dataend" type="number" min="0" placeholder="honest"></label>
+    </div>
+    <div class="row">
+      <label><code>notes.txt</code> <code>offset</code>: <input id="craft-off" type="number" min="0" placeholder="honest"></label>
+      <label><code>notes.txt</code> declared <code>length</code>: <input id="craft-len" type="number" min="0" placeholder="honest"></label>
+    </div>
+    <div class="row">
+      <label><input id="craft-local" type="checkbox" checked> plant a local flag to rehearse here <span class="dim">(uncheck when building for Tier&nbsp;2)</span></label>
+    </div>
+    <div class="row">
+      <button class="primary" id="craft-build">Build crafted image ▸</button>
+      <span class="note" id="craft-info"></span>
+    </div>
+  </details>
+
   <div class="panel">
     <h2 style="margin-top:.2rem">2 · Walkthrough <span class="dim">(spoilers — try it first)</span></h2>
 
@@ -193,15 +222,41 @@
         same exploit over the wire — develop it here, capture it there. That's the
         version worth bragging about.
         <br><br>
-        <span class="warn">Tier 2 is built and being hardened for public launch — it is
-        not live yet.</span> Develop your exploit here in the meantime; when the remote
-        capture opens, this same crafted image is what you'll fire over the wire.
+        <b>Tier 2 is <a href="./ctf-remote.html">live</a>.</b> Develop your exploit
+        here first — the flag is your own, so you can iterate freely — then reproduce it
+        against the per-session offset the remote kernel prints for your instance.
+      </p>
+    </details>
+    <details>
+      <summary>Scope — what this proves, what it doesn't, and where to learn more</summary>
+      <p class="note">
+        Be clear-eyed: this is <b>one</b> vulnerability class — a bounds check that trusts a
+        length <i>you</i> supply, so a read runs past a logical fence (<code>data_end</code>)
+        into bytes it shouldn't return: a classic
+        <a href="https://cwe.mitre.org/data/definitions/125.html" target="_blank" rel="noopener">out-of-bounds read</a>
+        (CWE-125). Two honest caveats. First, it is <b>not memory-unsafe</b> — the kernel
+        slices its backing buffer in safe Rust, so every read stays inside the allocation;
+        this is <i>information disclosure past a logical boundary</i>, not memory corruption or
+        a smashed stack (<code>src/fs.rs</code> notes this itself). Second, it is a single,
+        <b>deliberately-planted</b> instance that the strict <code>Fs::mount</code> in the same
+        file already rejects — real kernels layer memory-safe languages, continuous fuzzing,
+        and mitigations precisely to keep this class out. <b>One bug, one path</b> — not a
+        model of a hardened kernel's real attack surface.
+      </p>
+      <p class="note">
+        Want the fuller picture? This class is alive and hunted in production software:
+        <a href="https://googleprojectzero.blogspot.com/" target="_blank" rel="noopener">Google Project Zero</a>
+        (real-world exploit writeups) ·
+        <a href="http://langsec.org/" target="_blank" rel="noopener">LangSec</a>
+        (why parsing untrusted input <i>is</i> the security boundary) ·
+        <a href="https://pwn.college/" target="_blank" rel="noopener">pwn.college</a>
+        (hands-on binary exploitation, well past this one primitive).
       </p>
     </details>
   </div>
 
   <footer>
-    <span class="mono">自然 · Ziran OS</span> — a from-scratch x86-64 hobby OS.
+    <span style="font-family:ui-monospace,monospace">自然 · Ziran OS</span> — a from-scratch x86-64 hobby OS.
     Built by <a href="https://www.kennethlacroix.me" target="_blank" rel="noopener">Kenneth LaCroix</a> ·
     <a href="https://github.com/kenlacroix/ZiranOS" target="_blank" rel="noopener">source on GitHub</a> ·
     <a href="./index.html">guided tour</a>
@@ -347,6 +402,71 @@
       '③ <b>The leak.</b> <code>data_end</code> is forged to <code>total_size</code> and ' +
       "<code>notes.txt</code>'s extent is stretched over the flag. It mounts — then " +
       '<code>cat /notes.txt</code> prints the file <i>and</i> the flag after it.');
+
+    // -- Craft mode: a general ZranFS serializer -----------------------------
+    // Every superblock/dirent field is settable; blanks stay honest. It builds
+    // exactly what you specify and never chooses the exploit for you — the whole
+    // point of Tier 2 is that YOU decide what reaches the per-session offset.
+    function buildCraft({ total0, dataEnd, off0, len0, appendSecret, secret }) {
+      const fb = FILES.map((f) => enc.encode(f.content));
+      const sb = enc.encode(secret);
+      const dataStart = SB + FILES.length * DIRENT;
+      let off = dataStart;
+      const ext = fb.map((b) => { const e = { off, len: b.length }; off += b.length; return e; });
+      const honestDataEnd = off;          // end of the legit file bytes
+      const secretOff = off;              // a local flag would sit right after
+      const imgLen = appendSecret ? off + sb.length : off;   // the real bytes we emit
+      const buf = new Uint8Array(imgLen);
+      buf.set(enc.encode('ZRFS'), 0);
+      buf.set(le16(3), 4);
+      buf.set(le16(FILES.length), 6);
+      buf.set(le32(((total0 != null ? total0 : imgLen) >>> 0)), 8);       // total_size (over-declare it for Tier 2)
+      buf.set(le32(((dataEnd != null ? dataEnd : honestDataEnd) >>> 0)), 12); // data_end (forge it)
+      FILES.forEach((f, i) => {
+        const base = SB + i * DIRENT;
+        buf.set(enc.encode(f.name).slice(0, 20), base);
+        const eoff = (i === 0 && off0 != null) ? off0 : ext[i].off;
+        const elen = (i === 0 && len0 != null) ? len0 : ext[i].len;      // stretch it to reach past your data
+        buf.set(le32(eoff >>> 0), base + 20);
+        buf.set(le32(elen >>> 0), base + 24);
+        buf.set(le32(KIND_FILE), base + 28);
+      });
+      fb.forEach((b, i) => buf.set(b, ext[i].off));
+      if (appendSecret) buf.set(sb, secretOff);
+      return { buf, dataStart, honestDataEnd, secretOff, imgLen };
+    }
+
+    // ZranFS fields are unsigned 32-bit; reject blank/negative/overflow/garbage so a
+    // bad value can't silently wrap through the `>>> 0` coercion in buildCraft.
+    const numOrNull = (id) => {
+      const v = parseInt(document.getElementById(id).value, 10);
+      return (Number.isInteger(v) && v >= 0 && v <= 0xFFFFFFFF) ? v : null;
+    };
+    document.getElementById('craft-build').onclick = () => {
+      const appendSecret = document.getElementById('craft-local').checked;
+      const secret = secretEl();
+      const total0 = numOrNull('craft-total'), dataEnd = numOrNull('craft-dataend');
+      const off0 = numOrNull('craft-off'), len0 = numOrNull('craft-len');
+      const r = buildCraft({ total0, dataEnd, off0, len0, appendSecret, secret });
+      document.getElementById('image').value = toB64(r.buf);
+      captureTarget = appendSecret ? secret : null;   // arm (or clear) local capture detection
+      captured = false;
+      document.getElementById('capture').classList.remove('show');
+      const show = (v) => v == null ? 'honest' : v;
+      let info = `built a ${r.imgLen}-byte image · data begins at offset <b>${r.dataStart}</b> · ` +
+        `honest <code>data_end</code> is <b>${r.honestDataEnd}</b> · declared ` +
+        `<code>total_size</code>=<b>${show(total0)}</b>, <code>data_end</code>=<b>${show(dataEnd)}</b>, ` +
+        `<code>notes.txt</code> len=<b>${show(len0)}</b>`;
+      info += appendSecret
+        ? ` · local flag at offset <b>${r.secretOff}</b>`
+        : ` · <b>no local flag</b> — Tier 2's server appends its flag past your ${r.imgLen} bytes; aim at the offset <code>load</code> prints`;
+      // The strict Tier-1 reader requires total_size == the real image length; over-
+      // declaring it only pays off on Tier 2, where the appended flag extends the buffer.
+      if (appendSecret && total0 != null && total0 !== r.imgLen)
+        info += ` · <span class="warn">⚠ total_size=${total0} ≠ image length ${r.imgLen}; the local mount will reject this — over-declaring total_size only works on Tier 2.</span>`;
+      info += ` · <b>→ now hit “Load into the kernel” above.</b>`;
+      document.getElementById('craft-info').innerHTML = info;
+    };
 
     // -- stream the image into the running `load` command --------------------
     // Feed keystrokes to the guest through xterm. This build of xterm exposes

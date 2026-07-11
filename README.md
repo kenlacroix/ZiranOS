@@ -11,9 +11,33 @@ gained, in a system that boots and eventually runs a simple file manager, and in
 an honest public trail of how it was built — including the parts that didn't
 work.
 
+<p align="center">
+  <a href="https://ziranos.pages.dev">
+    <img src="docs/ziran-demo.gif" alt="Ziran OS: a real serial session — help, ps, mem, and walking the on-disk tree with cd/ls/cat" width="720">
+  </a>
+  <br>
+  <em>A real session captured byte-for-byte over serial — <code>ps</code>, <code>mem</code>, and walking the on-disk tree with <code>cd</code>/<code>ls</code>/<code>cat</code>. <a href="https://ziranos.pages.dev">Boot the real kernel live →</a></em>
+</p>
+
 See **[PLAN.md](PLAN.md)** for the full vision, technical decisions, and
 milestone roadmap, and **[STATUS.md](STATUS.md)** for where things actually
 stand right now.
+
+---
+
+## Try it — it's live
+
+- 🖥️ **Boot the real kernel in your browser** → **[ziranos.pages.dev](https://ziranos.pages.dev)**
+  Real QEMU compiled to WebAssembly runs the *actual* 64-bit kernel to an
+  interactive shell in a tab — not a replay — beside a guided predict → observe →
+  explain tour over every layer.
+- 🚩 **Filesystem CTF — Tier 1 (in-browser)** → **[ziranos.pages.dev/ctf](https://ziranos.pages.dev/ctf)**
+  Craft a disk image and make the kernel's own filesystem hand you a flag `ls`
+  can't see. White-box practice — the point is the exploit primitive, not secrecy.
+- 🌐 **Remote capture — Tier 2** → **[ziranos.pages.dev/ctf-remote](https://ziranos.pages.dev/ctf-remote)**
+  A *real* remote CTF: a unique flag is minted per session and lives only in the
+  server instance's RAM — not in this repo, not in the page, not in any bytes you're
+  given. Steal it over the wire.
 
 ---
 
@@ -88,7 +112,7 @@ New here? Start with the plain-language explainers in
 [`docs/concepts/`](docs/concepts/) — e.g. [interrupts](docs/concepts/interrupts.md),
 written from first principles alongside the code. Or explore it in your browser:
 the **[`web/`](web/) teaching tool** walks a guided predict → observe → explain
-tour over milestones M0–M12 (with an ELI5 toggle for plain-language explanations,
+tour over milestones M0–M16 (with an ELI5 toggle for plain-language explanations,
 and the "why this exists / not AI slop" manifesto up front). It comes in three
 levels of realness, each labelled honestly:
 
@@ -100,15 +124,19 @@ levels of realness, each labelled honestly:
   byte-for-byte over the serial line (`make console`), replayed with real timing;
 - **a genuine live boot** — real QEMU compiled to WebAssembly
   (`web/build-qemu-wasm.sh`) booting the actual 64-bit kernel (via `-kernel`) in the
-  tab. This **works** — verified booting to an interactive `ziran:/>` shell in a
-  browser, both by hand and by an automated headless-Chrome test (`make web-test`),
-  and it flushed out two latent boot bugs along the way. The "Boot the real kernel"
-  button is live; the ~17 MB of assets just aren't publicly **hosted** yet — run it
-  now with `make serve` (or self-host).
+  tab. This is **live and hosted at [ziranos.pages.dev](https://ziranos.pages.dev)** —
+  verified booting to an interactive `ziran:/>` shell in a browser, both by hand and
+  by an automated headless-Chrome test (`make web-test`), and it flushed out two
+  latent boot bugs along the way.
+
+And a **capture-the-flag against the kernel itself**:
+[Tier 1](https://ziranos.pages.dev/ctf) is white-box practice in your browser (leak a
+flag the filesystem hides); [Tier 2](https://ziranos.pages.dev/ctf-remote) is a real
+remote capture where the flag lives only in a server's RAM. See
+[`ctf-server/`](ctf-server/) for the (host-side) remote-CTF infrastructure.
 
 Hosting is written up in [`docs/DEPLOY.md`](docs/DEPLOY.md) (Cloudflare Pages; with
-the `.data` now trimmed to ~0.5 MB the whole thing fits under Pages' 25 MB/file cap,
-so R2 is optional).
+the `.data` trimmed to ~0.5 MB the whole thing fits under Pages' 25 MB/file cap).
 
 | Range | State |
 |------|-------|
@@ -253,4 +281,8 @@ sandbox, where QEMU wasn't installable.
 
 ## License
 
-**MIT** — see [LICENSE-MIT](LICENSE-MIT).
+**MIT** — see [LICENSE](LICENSE).
+
+---
+
+Built by [Kenneth LaCroix](https://kennethlacroix.me)

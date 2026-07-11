@@ -27,6 +27,7 @@ use core::panic::PanicInfo;
 
 mod frame_allocator;
 mod fs;
+mod fw_cfg;
 mod gdt;
 mod heap;
 mod interrupts;
@@ -252,6 +253,17 @@ pub extern "C" fn kernel_main(multiboot_info_addr: u64) -> ! {
     // one). The lesson beyond M13: the CPU stops unauthorized *access*, but only
     // software stops authorized *misuse*. See docs/planning/milestone-15-eng-plan.md.
     usermode::security_test();
+
+    // Tier-2 CTF mode: if the CTF host injected a per-session secret via
+    // `-fw_cfg opt/flag`, install it so `load` runs the remote-capture path (append
+    // the flag past the player's bytes, mount with the length-trusting reader). Plain
+    // boots with no such entry — e.g. the in-browser Tier-1 kernel — skip this and
+    // stay in strict mode. Needs the heap (M8), which is up by now.
+    if let Some(flag) = fw_cfg::read_flag() {
+        let n = flag.len();
+        shell::set_tier2_flag(flag);
+        serial_println!("[m16] tier-2: fw_cfg opt/flag present ({n} bytes) -- remote-capture mode");
+    }
 
     task::init();
     task::spawn(shell::shell_main);
