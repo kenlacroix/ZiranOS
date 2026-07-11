@@ -1,40 +1,71 @@
-# Proxmox VM firewall for the SIMPLER topology: VM on the LAN (vmbr0), egress to the
-# LAN blocked at the HOST. Copy to /etc/pve/firewall/<VMID>.fw on the Proxmox host
-# (or set the equivalent in the GUI: VM -> Firewall). Also enable the firewall at
-# Datacenter -> Firewall and Node -> Firewall.
+# Proxmox VM firewall for the SIMPLER topology: VM on the LAN (vmbr0). Egress to the
+# LAN is blocked at the HOST, AND WAN egress is now restricted to an allowlist so the
+# tight policy SURVIVES a VM-root `nft flush ruleset`. Copy to
+# /etc/pve/firewall/<VMID>.fw on the Proxmox host.
 #
 # WHY host-level (not in-VM): the attacker's goal is ring-0 in the guest, and we
 # assume a possible QEMU escape to VM-root. A rooted VM can flush its OWN nftables —
 # so the block that matters MUST live outside the VM. This file is enforced at the
 # bridge by the Proxmox host; the VM cannot touch it. THIS is the real boundary.
 #
-# Trade-off vs the NAT'd island (proxmox-host-nat.conf): simpler (direct SSH admin),
-# but the VM shares your LAN's L2 segment. `ipfilter` below pins it to its MAC/IP to
-# blunt ARP/IP spoofing. For a hobby CTF this is a sound choice.
+# WHAT CHANGED (egress tightening): policy_out is now DROP (was ACCEPT). WAN egress is
+# permitted only to the same destinations the in-VM nftables allows — Cloudflare ranges
+# (tunnel + CF-fronted apt mirrors), Canonical ranges (us.archive/security.ubuntu.com +
+# ntp.ubuntu.com), and cloud DNS 1.1.1.1/1.0.0.1:53. A flushed guest firewall therefore
+# no longer yields OPEN WAN egress — only this allowlist. Mirrors /etc/nftables.conf.
 #
-# EDIT: the admin source IP, the gateway IP, and your LAN range.
+# EDIT before applying: the ipfilter IPSET name must match the VM's LAN NIC index on
+# the LIVE host (Proxmox names it ipfilter-net0 / ipfilter-net1 per NIC) and hold the
+# VM's real IP. Do NOT blind-overwrite the live <VMID>.fw's ipfilter block with a
+# guessed NIC index — diff against the live file first.
 
 [OPTIONS]
 enable: 1
 policy_in: DROP
-policy_out: ACCEPT
+policy_out: DROP
 # Anti-spoof: the VM may only use its assigned MAC/IP (blunts L2/ARP tricks).
-# Requires an [IPSET] with the VM's IP (below) referenced as an ipfilter-net.
 ipfilter: 1
 
-[IPSET ipfilter-net1]  # the VM's own NIC (net1 = the LAN NIC); set to the VM's IP
-192.0.2.66             # <- EXAMPLE (RFC5737): replace with your VM's real LAN IP
+[IPSET ipfilter-net1]  # VM LAN NIC — confirm the -net<N> index against the live <VMID>.fw
+192.0.2.66             # <- EXAMPLE (RFC5737): replace with the VM's real LAN IP
+
+# WAN egress allowlist — mirrors the in-VM nftables allowlist so a guest-side flush
+# cannot open WAN egress. Keep in sync with /etc/nftables.conf on the VM.
+[IPSET wan_allow]
+# Cloudflare (tunnel + CF-fronted apt mirrors)
+173.245.48.0/20
+103.21.244.0/22
+103.22.200.0/22
+103.31.4.0/22
+141.101.64.0/18
+108.162.192.0/18
+190.93.240.0/20
+188.114.96.0/20
+197.234.240.0/22
+198.41.128.0/17
+162.158.0.0/15
+104.16.0.0/13
+104.24.0.0/14
+172.64.0.0/13
+131.0.72.0/22
+# Canonical (us.archive.ubuntu.com, security.ubuntu.com, ntp.ubuntu.com)
+91.189.88.0/21
+185.125.188.0/22
 
 [RULES]
-# --- INBOUND: admin/Claude SSH from your workstation ONLY (edit the source IP) ---
-IN ACCEPT -source 192.0.2.10 -p tcp -dport 22 -log nolog   # <- EXAMPLE: your admin workstation IP
-# everything else inbound falls through to policy_in: DROP
-# (cloudflared needs NO inbound rule — it dials OUT to Cloudflare.)
+# --- INBOUND: admin/Claude SSH only; everything else -> policy_in: DROP ---
+IN ACCEPT -source 192.0.2.0/24 -p tcp -dport 22 -log nolog   # <- EXAMPLE (RFC5737): your admin LAN/workstation
 
-# --- OUTBOUND: the island — allow the gateway (WAN/DNS) + public internet,
-#     but DROP everything headed for the LAN. Rules are first-match, top-down. ---
-OUT ACCEPT -dest 192.0.2.1 -log nolog            # CHANGE ME: default gateway -> WAN + DNS via router
-OUT DROP   -dest 192.168.0.0/16 -log nolog        # block the LAN
-OUT DROP   -dest 10.0.0.0/8 -log nolog
-OUT DROP   -dest 172.16.0.0/12 -log nolog
-# public-internet destinations fall through to policy_out: ACCEPT (needed for the tunnel)
+# --- OUTBOUND: first-match top-down; the rest falls through to policy_out: DROP ---
+# 1) cloud DNS (matches the in-VM 1.1.1.1/1.0.0.1:53 allow)
+OUT ACCEPT -dest 1.1.1.1 -p udp -dport 53 -log nolog
+OUT ACCEPT -dest 1.0.0.1 -p udp -dport 53 -log nolog
+OUT ACCEPT -dest 1.1.1.1 -p tcp -dport 53 -log nolog
+OUT ACCEPT -dest 1.0.0.1 -p tcp -dport 53 -log nolog
+# 2) WAN allowlist (Cloudflare + Canonical), all ports — carries the tunnel, apt, NTP
+OUT ACCEPT -dest +wan_allow -log nolog
+# 3) explicit LAN drop (belt-and-suspenders; policy_out: DROP already covers it)
+OUT DROP -dest 192.168.0.0/16 -log nolog
+OUT DROP -dest 10.0.0.0/8 -log nolog
+OUT DROP -dest 172.16.0.0/12 -log nolog
+# everything else (arbitrary WAN) -> policy_out: DROP
