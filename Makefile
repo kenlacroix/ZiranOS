@@ -211,10 +211,10 @@ deploy-web:
 
 # Rebuild ONLY the flat browser kernel (web/kernel-v86.bin) from current source.
 # `kernel-v86.bin` is what the live qemu-wasm boot loads via `-kernel`; it is a
-# gitignored artifact, so pulling source does NOT refresh it and a stale one boots
-# old code (e.g. an M12 kernel with no `load` command). This depends only on the
-# ELF + objcopy -- NOT the ISO -- so it needs no GRUB. Run it whenever the kernel
-# changed, before deploying.
+# COMMITTED build artifact (Pages deploys from git), so run this and commit the
+# result whenever the kernel changed -- otherwise the live site boots old code
+# (e.g. an M12 kernel with no `load` command). This depends only on the ELF +
+# objcopy -- NOT the ISO -- so it needs no GRUB.
 stage-web-kernel: $(KERNEL)
 	$(OBJCOPY) -O binary $(KERNEL) web/kernel-v86.bin
 	@echo "staged fresh web/kernel-v86.bin ($$(wc -c < web/kernel-v86.bin) bytes)"
